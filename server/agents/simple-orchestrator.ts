@@ -1,5 +1,5 @@
 import { db } from "../db";
-import { accounts, resources, costs } from "@shared/schema";
+import { accounts, resources, costs } from "../../shared/schema";
 import { eq, and, inArray } from "drizzle-orm";
 
 interface VisualizationData {

@@ -1,7 +1,7 @@
 import { db } from "../db";
-import { accounts, resources, costs, chatMessages } from "@shared/schema";
+import { accounts, resources, costs, chatMessages } from "../../shared/schema";
 import { eq, and, sql, desc, asc, like, or, gte, lte, count, sum, avg, max, min } from "drizzle-orm";
-import type { Account, Resource, Cost } from "@shared/schema";
+import type { Account, Resource, Cost } from "../../shared/schema";
 
 interface TaskItem {
   id: string;

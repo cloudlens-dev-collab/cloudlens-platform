@@ -1,4 +1,4 @@
-import { users, accounts, resources, costs, alerts, chatMessages, type User, type InsertUser, type Account, type InsertAccount, type Resource, type InsertResource, type Cost, type InsertCost, type Alert, type InsertAlert, type ChatMessage, type InsertChatMessage } from "@shared/schema";
+import { users, accounts, resources, costs, alerts, chatMessages, type User, type InsertUser, type Account, type InsertAccount, type Resource, type InsertResource, type Cost, type InsertCost, type Alert, type InsertAlert, type ChatMessage, type InsertChatMessage } from "../shared/schema";
 import { db } from "./db";
 import { eq, and, gte, lte, desc, or, inArray } from "drizzle-orm";
 import type { IStorage } from "./storage";

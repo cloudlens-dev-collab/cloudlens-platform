@@ -4,6 +4,7 @@ import { z } from "zod";
 import { storage } from "./storage";
 import { llmService } from "./services/llm";
 import { simpleOrchestrator } from "./agents/simple-orchestrator";
+import { sqlAgent } from "./agents/sql-agent";
 
 function isInfrastructureQuery(message: string): boolean {
   const infraKeywords = [
@@ -28,6 +29,11 @@ function isInfrastructureQuery(message: string): boolean {
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  // Simple test endpoint
+  app.get("/api/test", (req: Request, res: Response) => {
+    res.json({ message: "Server is working", timestamp: new Date().toISOString() });
+  });
+
   // LangGraph Orchestrated Chat endpoint with rich visualizations
   app.post("/api/chat/:sessionId", async (req: Request, res: Response) => {
     try {
@@ -111,10 +117,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
     } catch (error) {
-      console.error("Chat endpoint error:", error);
+      console.error("❌ CHAT ENDPOINT ERROR:", error);
+      console.error("Error details:", JSON.stringify(error, null, 2));
+      console.error("Error stack:", error instanceof Error ? error.stack : "No stack trace");
       res.status(500).json({ 
         error: "Failed to process chat message",
-        details: error instanceof Error ? error.message : "Unknown error"
+        details: error instanceof Error ? error.message : JSON.stringify(error),
+        errorType: typeof error,
+        stack: error instanceof Error ? error.stack : undefined
       });
     }
   });
@@ -164,10 +174,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Dashboard summary endpoint
   app.get("/api/dashboard/summary", async (req, res) => {
     try {
+      // Get accountIds from query parameters if provided
+      const { accountIds } = req.query;
+      let targetAccountIds: number[] | undefined;
+      
+      if (accountIds && accountIds !== 'all') {
+        targetAccountIds = String(accountIds).split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
+      }
+
       const accounts = await storage.getAccounts();
-      const resources = await storage.getResources();
-      const costs = await storage.getCosts();
-      const alerts = await storage.getAlerts();
+      const resources = await storage.getResources(targetAccountIds);
+      const costs = await storage.getCosts(targetAccountIds);
+      const alerts = await storage.getAlerts(targetAccountIds);
 
       const totalResources = resources.length;
       const totalCost = costs.reduce((sum, cost) => sum + parseFloat(cost.amount), 0);
@@ -183,17 +201,53 @@ export async function registerRoutes(app: Express): Promise<Server> {
       ).length;
       const potentialSavings = (unattachedVolumes * 20) + (stoppedInstances * 100);
 
+      // Generate resource breakdown for pie chart
+      const resourceBreakdown = resources.reduce((breakdown, resource) => {
+        const type = resource.type || 'unknown';
+        breakdown[type] = (breakdown[type] || 0) + 1;
+        return breakdown;
+      }, {} as Record<string, number>);
+
+      // Generate cost trend data (placeholder for now)
+      const costTrend = {
+        current: totalCost.toFixed(2),
+        previous: (totalCost * 0.95).toFixed(2), // Simulate 5% increase
+        percentChange: "5.0"
+      };
+
       res.json({
         totalAccounts: accounts.length,
         totalResources,
+        activeResources: totalResources, // Frontend expects this field name
         totalCost: totalCost.toFixed(2),
         alertCount: alerts.length,
         criticalAlertCount: criticalAlerts,
         potentialSavings: potentialSavings.toFixed(2),
+        resourceBreakdown,
+        costTrend,
       });
     } catch (error) {
-      console.error("Error fetching dashboard summary:", error);
-      res.status(500).json({ error: "Failed to fetch dashboard summary" });
+      console.error("❌ DASHBOARD ERROR:", error);
+      console.error("Error details:", JSON.stringify(error, null, 2));
+      console.error("Error stack:", error instanceof Error ? error.stack : "No stack trace");
+      res.status(500).json({ 
+        error: "Failed to fetch dashboard summary",
+        details: error instanceof Error ? error.message : JSON.stringify(error)
+      });
+    }
+  });
+
+  // Accounts endpoint
+  app.get("/api/accounts", async (req: Request, res: Response) => {
+    try {
+      const accounts = await storage.getAccounts();
+      res.json(accounts);
+    } catch (error) {
+      console.error("❌ ACCOUNTS ERROR:", error);
+      res.status(500).json({ 
+        error: "Failed to fetch accounts",
+        details: error instanceof Error ? error.message : JSON.stringify(error)
+      });
     }
   });
 

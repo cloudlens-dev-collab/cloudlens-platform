@@ -25,7 +25,7 @@ export function Costs() {
     : [selectedAccount.id.toString()];
 
   const { data: costs = [], isLoading } = useQuery<Cost[]>({
-    queryKey: ["/api/costs", accountIds.join(","), timePeriod],
+    queryKey: ["/api/costs", { accountIds: accountIds.join(","), timePeriod }],
     enabled: accounts.length > 0,
     refetchOnWindowFocus: false,
     refetchOnMount: false,

@@ -59,6 +59,8 @@ export function Resources() {
     enabled: accounts.length > 0,
     staleTime: 0,
     refetchOnMount: true,
+    refetchOnWindowFocus: true,
+    cacheTime: 0, // Disable caching to ensure fresh data
   });
 
   const syncMutation = useMutation({
@@ -141,8 +143,15 @@ export function Resources() {
     currentPage * itemsPerPage
   );
 
-  const uniqueTypes = Array.from(new Set(resources.map(r => r.type)));
-  const uniqueStatuses = Array.from(new Set(resources.map(r => r.status)));
+  // Get all unique types and statuses from unfiltered data
+  const { data: allResources = [] } = useQuery<Resource[]>({
+    queryKey: ["/api/resources", { accountIds: accountIds.join(",") }],
+    enabled: accounts.length > 0,
+    staleTime: 5 * 60 * 1000, // Cache for 5 minutes for dropdown options
+  });
+
+  const uniqueTypes = Array.from(new Set(allResources.map(r => r.type)));
+  const uniqueStatuses = Array.from(new Set(allResources.map(r => r.status)));
 
   const handleSort = (column: string) => {
     if (sortBy === column) {
@@ -244,6 +253,40 @@ export function Resources() {
   useEffect(() => {
     setCurrentPage(1);
   }, [debouncedSearch, selectedProvider, selectedType, selectedStatus, sortBy, sortOrder]);
+
+  // Debug logging
+  useEffect(() => {
+    console.log("🔍 Resources Debug:", {
+      count: resources.length,
+      selectedProvider,
+      selectedType,
+      selectedStatus,
+      sortBy,
+      sortOrder,
+      sampleCosts: resources.slice(0, 5).map(r => ({ name: r.name, cost: r.monthlyCost, type: r.type })),
+      queryKey: ["/api/resources", { 
+        accountIds: accountIds.join(","),
+        search: debouncedSearch.trim() || undefined,
+        provider: selectedProvider !== 'all' ? selectedProvider : undefined,
+        type: selectedType !== 'all' ? selectedType : undefined,
+        status: selectedStatus !== 'all' ? selectedStatus : undefined,
+        sortBy,
+        sortOrder
+      }]
+    });
+    
+    if (sortBy === 'monthlyCost') {
+      console.log("💰 Cost sorting active:", {
+        sortBy,
+        sortOrder,
+        firstFewCosts: resources.slice(0, 10).map(r => ({ 
+          name: r.name, 
+          cost: r.monthlyCost,
+          costAsNumber: r.monthlyCost ? parseFloat(r.monthlyCost) : 0
+        }))
+      });
+    }
+  }, [resources, selectedProvider, selectedType, selectedStatus, sortBy, sortOrder, accountIds, debouncedSearch]);
 
   return (
     <div className="p-6">
@@ -391,10 +434,10 @@ export function Resources() {
                     <TableHead>
                       <button
                         className="flex items-center space-x-1 hover:text-primary font-medium"
-                        onClick={() => handleSort('cost')}
+                        onClick={() => handleSort('monthlyCost')}
                       >
-                        <span>Cost/Month</span>
-                        {getSortIcon('cost')}
+                        <span>Cost (Month-to-Date)</span>
+                        {getSortIcon('monthlyCost')}
                       </button>
                     </TableHead>
                     <TableHead>
@@ -448,7 +491,9 @@ export function Resources() {
                           </Badge>
                         </TableCell>
                         <TableCell className="font-medium">
-                          ${resource.monthlyCost || "0.00"}
+                          {resource.monthlyCost ? `$${resource.monthlyCost}` : (
+                            <span className="text-gray-400 italic">No cost data</span>
+                          )}
                         </TableCell>
                         <TableCell>
                           <span className="text-sm text-gray-600">
@@ -591,13 +636,22 @@ export function Resources() {
                       <p className="font-medium">{selectedResource.region || "Global"}</p>
                     </div>
                     <div>
-                      <label className="text-sm font-medium text-gray-500">Monthly Cost</label>
+                      <label className="text-sm font-medium text-gray-500">Cost (Month-to-Date)</label>
                       <div className="flex items-center space-x-1">
                         <DollarSign className="w-4 h-4 text-green-600" />
-                        <span className="font-semibold text-green-600">
-                          ${selectedResource.monthlyCost || "0.00"}
-                        </span>
+                        {selectedResource.monthlyCost ? (
+                          <span className="font-semibold text-green-600">
+                            ${selectedResource.monthlyCost}
+                          </span>
+                        ) : (
+                          <span className="font-semibold text-gray-400 italic">
+                            No cost data
+                          </span>
+                        )}
                       </div>
+                      <p className="text-xs text-gray-500 mt-1">
+                        Accrued costs from start of current month to today
+                      </p>
                     </div>
                     <div>
                       <label className="text-sm font-medium text-gray-500">Last Updated</label>

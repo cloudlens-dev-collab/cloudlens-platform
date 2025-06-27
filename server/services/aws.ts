@@ -99,11 +99,15 @@ export class AWSService {
       "ap-southeast-1", "ap-southeast-2", "ap-northeast-1"
     ];
     
+    // Fetch actual month-to-date costs first to apply to resources
+    console.log("🔍 Fetching month-to-date accrued costs from AWS Cost Explorer...");
+    const actualCosts = await this.getResourceCosts(account);
+    
     try {
       console.log(`Scanning AWS account ${account.name} across regions: ${regions.join(', ')}`);
       
       // Sync S3 buckets (global service)
-      const s3Resources = await this.syncS3Buckets(account);
+      const s3Resources = await this.syncS3Buckets(account, actualCosts);
       resources.push(...s3Resources);
       console.log(`Found ${s3Resources.length} S3 buckets`);
 
@@ -113,7 +117,7 @@ export class AWSService {
         
         try {
           // EC2 instances in this region
-          const ec2Resources = await this.syncEC2InstancesInRegion(account, region);
+          const ec2Resources = await this.syncEC2InstancesInRegion(account, region, actualCosts);
           resources.push(...ec2Resources);
           console.log(`Found ${ec2Resources.length} EC2 instances in ${region}`);
         } catch (error) {
@@ -123,7 +127,7 @@ export class AWSService {
 
         try {
           // RDS instances in this region
-          const rdsResources = await this.syncRDSInstancesInRegion(account, region);
+          const rdsResources = await this.syncRDSInstancesInRegion(account, region, actualCosts);
           resources.push(...rdsResources);
           console.log(`Found ${rdsResources.length} RDS instances in ${region}`);
         } catch (error) {
@@ -133,7 +137,7 @@ export class AWSService {
 
         try {
           // EBS volumes in this region
-          const ebsResources = await this.syncEBSVolumesInRegion(account, region);
+          const ebsResources = await this.syncEBSVolumesInRegion(account, region, actualCosts);
           resources.push(...ebsResources);
           console.log(`Found ${ebsResources.length} EBS volumes in ${region}`);
         } catch (error) {
@@ -232,7 +236,7 @@ export class AWSService {
     return resources;
   }
 
-  private async syncEC2InstancesInRegion(account: Account, region: string): Promise<Resource[]> {
+  private async syncEC2InstancesInRegion(account: Account, region: string, actualCosts: Map<string, number>): Promise<Resource[]> {
     const ec2Client = await this.getClient(account, "ec2", region);
     const resources: Resource[] = [];
 
@@ -243,10 +247,21 @@ export class AWSService {
       for (const reservation of response.Reservations || []) {
         for (const instance of reservation.Instances || []) {
           const name = instance.Tags?.find(tag => tag.Key === "Name")?.Value || instance.InstanceId || "Unknown";
+          const resourceId = instance.InstanceId!;
+          
+          // Use only actual cost from AWS Cost Explorer
+          const actualCost = actualCosts.get(resourceId);
+          const monthlyCost = actualCost ? actualCost.toFixed(2) : null;
+          
+          if (actualCost) {
+            console.log(`💰 Actual cost for ${resourceId}: $${actualCost.toFixed(2)}`);
+          } else {
+            console.log(`📊 No cost data available for ${resourceId} from AWS Cost Explorer`);
+          }
           
           resources.push({
             accountId: account.id,
-            resourceId: instance.InstanceId!,
+            resourceId: resourceId,
             name,
             type: "ec2-instance",
             provider: "aws",
@@ -275,7 +290,7 @@ export class AWSService {
               networkPerformance: instance.SriovNetSupport ? 'Enhanced Networking' : 'Standard',
               ebsOptimized: instance.EbsOptimized,
             },
-            monthlyCost: this.estimateEC2Cost(instance.InstanceType || ""),
+            monthlyCost: monthlyCost,
             lastUpdated: new Date(),
           });
         }
@@ -287,7 +302,7 @@ export class AWSService {
     return resources;
   }
 
-  private async syncRDSInstancesInRegion(account: Account, region: string): Promise<Resource[]> {
+  private async syncRDSInstancesInRegion(account: Account, region: string, actualCosts: Map<string, number>): Promise<Resource[]> {
     const rdsClient = await this.getClient(account, "rds", region);
     const resources: Resource[] = [];
 
@@ -296,10 +311,22 @@ export class AWSService {
       const response = await rdsClient.send(command);
 
       for (const dbInstance of response.DBInstances || []) {
+        const resourceId = dbInstance.DBInstanceIdentifier!;
+        
+        // Use only actual cost from AWS Cost Explorer
+        const actualCost = actualCosts.get(resourceId);
+        const monthlyCost = actualCost ? actualCost.toFixed(2) : null;
+        
+        if (actualCost) {
+          console.log(`💰 Actual cost for RDS ${resourceId}: $${actualCost.toFixed(2)}`);
+        } else {
+          console.log(`📊 No cost data available for RDS ${resourceId} from AWS Cost Explorer`);
+        }
+        
         resources.push({
           accountId: account.id,
-          resourceId: dbInstance.DBInstanceIdentifier!,
-          name: dbInstance.DBInstanceIdentifier!,
+          resourceId: resourceId,
+          name: resourceId,
           type: "rds-instance",
           provider: "aws",
           status: dbInstance.DBInstanceStatus || "unknown",
@@ -312,7 +339,7 @@ export class AWSService {
             endpoint: dbInstance.Endpoint?.Address,
             port: dbInstance.Endpoint?.Port,
           },
-          monthlyCost: this.estimateRDSCost(dbInstance.DBInstanceClass || ""),
+          monthlyCost: monthlyCost,
           lastUpdated: new Date(),
         });
       }
@@ -323,7 +350,7 @@ export class AWSService {
     return resources;
   }
 
-  private async syncS3Buckets(account: Account): Promise<Resource[]> {
+  private async syncS3Buckets(account: Account, actualCosts: Map<string, number>): Promise<Resource[]> {
     const s3Client = await this.getClient(account, "s3");
     const resources: Resource[] = [];
 
@@ -332,10 +359,22 @@ export class AWSService {
       const response = await s3Client.send(command);
 
       for (const bucket of response.Buckets || []) {
+        const resourceId = bucket.Name!;
+        
+        // Use only actual cost from AWS Cost Explorer
+        const actualCost = actualCosts.get(resourceId);
+        const monthlyCost = actualCost ? actualCost.toFixed(2) : null;
+        
+        if (actualCost) {
+          console.log(`💰 Actual cost for S3 ${resourceId}: $${actualCost.toFixed(2)}`);
+        } else {
+          console.log(`📊 No cost data available for S3 ${resourceId} from AWS Cost Explorer`);
+        }
+        
         resources.push({
           accountId: account.id,
-          resourceId: bucket.Name!,
-          name: bucket.Name!,
+          resourceId: resourceId,
+          name: resourceId,
           type: "s3-bucket",
           provider: "aws",
           status: "active",
@@ -343,7 +382,7 @@ export class AWSService {
           metadata: {
             creationDate: bucket.CreationDate,
           },
-          monthlyCost: "0.00", // Would need CloudWatch metrics for accurate storage costs
+          monthlyCost: monthlyCost,
           lastUpdated: new Date(),
         });
       }
@@ -354,7 +393,7 @@ export class AWSService {
     return resources;
   }
 
-  private async syncEBSVolumesInRegion(account: Account, region: string): Promise<Resource[]> {
+  private async syncEBSVolumesInRegion(account: Account, region: string, actualCosts: Map<string, number>): Promise<Resource[]> {
     const ec2Client = await this.getClient(account, "ec2", region);
     const resources: Resource[] = [];
 
@@ -364,10 +403,21 @@ export class AWSService {
 
       for (const volume of response.Volumes || []) {
         const name = volume.Tags?.find(tag => tag.Key === "Name")?.Value || volume.VolumeId || "Unknown";
+        const resourceId = volume.VolumeId!;
+        
+        // Use only actual cost from AWS Cost Explorer
+        const actualCost = actualCosts.get(resourceId);
+        const monthlyCost = actualCost ? actualCost.toFixed(2) : null;
+        
+        if (actualCost) {
+          console.log(`💰 Actual cost for EBS ${resourceId}: $${actualCost.toFixed(2)}`);
+        } else {
+          console.log(`📊 No cost data available for EBS ${resourceId} from AWS Cost Explorer`);
+        }
         
         resources.push({
           accountId: account.id,
-          resourceId: volume.VolumeId!,
+          resourceId: resourceId,
           name,
           type: "ebs-volume",
           provider: "aws",
@@ -385,7 +435,7 @@ export class AWSService {
             createTime: volume.CreateTime,
             state: volume.State,
           },
-          monthlyCost: this.estimateEBSCost(volume.Size || 0, volume.VolumeType || "gp2"),
+          monthlyCost: monthlyCost,
           lastUpdated: new Date(),
         });
       }
@@ -751,6 +801,65 @@ export class AWSService {
     return costs;
   }
 
+  // Get actual accrued costs for current calendar month from AWS Cost Explorer
+  async getResourceCosts(account: Account): Promise<Map<string, number>> {
+    const costExplorerClient = await this.getClient(account, "cost-explorer");
+    const resourceCosts = new Map<string, number>();
+
+    try {
+      // Get current calendar month accrued costs (month-to-date)
+      const now = new Date();
+      const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      const today = new Date();
+
+      console.log(`🔍 Fetching accrued costs for current month: ${currentMonthStart.toISOString().split('T')[0]} to ${today.toISOString().split('T')[0]}`);
+
+      const command = new GetCostAndUsageCommand({
+        TimePeriod: {
+          Start: currentMonthStart.toISOString().split('T')[0],
+          End: today.toISOString().split('T')[0],
+        },
+        Granularity: "DAILY", // Get daily data to sum up for month-to-date
+        Metrics: ["UnblendedCost"], // Use UnblendedCost for actual costs without discounts
+        GroupBy: [
+          {
+            Type: "DIMENSION",
+            Key: "RESOURCE_ID",
+          },
+        ],
+      });
+
+      const response = await costExplorerClient.send(command);
+
+      // Aggregate daily costs by resource for month-to-date total
+      const resourceDailyCosts = new Map<string, number>();
+
+      for (const result of response.ResultsByTime || []) {
+        for (const group of result.Groups || []) {
+          const resourceId = group.Keys?.[0];
+          const dailyAmount = parseFloat(group.Metrics?.UnblendedCost?.Amount || "0");
+          
+          if (resourceId && dailyAmount > 0) {
+            const currentTotal = resourceDailyCosts.get(resourceId) || 0;
+            resourceDailyCosts.set(resourceId, currentTotal + dailyAmount);
+          }
+        }
+      }
+
+      // Store the month-to-date totals
+      for (const [resourceId, monthToDateCost] of resourceDailyCosts) {
+        resourceCosts.set(resourceId, monthToDateCost);
+      }
+
+      console.log(`💰 Fetched month-to-date accrued costs for ${resourceCosts.size} resources (${currentMonthStart.toISOString().split('T')[0]} to ${today.toISOString().split('T')[0]})`);
+    } catch (error) {
+      console.error("Error fetching resource-level costs from AWS:", error);
+      console.error("Cost Explorer API may not be available or permissions insufficient");
+    }
+
+    return resourceCosts;
+  }
+
 
 
   private getInstancePerformance(instanceType: string) {
@@ -792,42 +901,4 @@ export class AWSService {
     };
   }
 
-  private estimateEC2Cost(instanceType: string): string {
-    // Simplified cost estimation - in production, use AWS Pricing API
-    const costMap: Record<string, number> = {
-      "t3.micro": 8.50,
-      "t3.small": 17.00,
-      "t3.medium": 34.00,
-      "t3.large": 68.00,
-      "m5.large": 156.24,
-      "m5.xlarge": 312.48,
-      "r5.2xlarge": 891.20,
-    };
-    
-    return (costMap[instanceType] || 50.00).toFixed(2);
-  }
-
-  private estimateRDSCost(instanceClass: string): string {
-    // Simplified cost estimation
-    const costMap: Record<string, number> = {
-      "db.t3.micro": 15.00,
-      "db.t3.small": 30.00,
-      "db.m5.large": 200.00,
-      "db.r5.large": 250.00,
-    };
-    
-    return (costMap[instanceClass] || 100.00).toFixed(2);
-  }
-
-  private estimateEBSCost(sizeGB: number, volumeType: string): string {
-    const costPerGB: Record<string, number> = {
-      "gp2": 0.10,
-      "gp3": 0.08,
-      "io1": 0.125,
-      "io2": 0.125,
-    };
-    
-    const monthlyCost = sizeGB * (costPerGB[volumeType] || 0.10);
-    return monthlyCost.toFixed(2);
-  }
 }

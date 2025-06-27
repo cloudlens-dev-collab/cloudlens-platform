@@ -3,7 +3,7 @@ import {
   type User, type InsertUser, type Account, type InsertAccount,
   type Resource, type InsertResource, type Cost, type InsertCost,
   type Alert, type InsertAlert, type ChatMessage, type InsertChatMessage
-} from "@shared/schema";
+} from "../shared/schema";
 
 export interface IStorage {
   // Users

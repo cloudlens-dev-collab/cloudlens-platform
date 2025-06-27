@@ -18,19 +18,20 @@ export function Dashboard() {
 
   const { data: summary, isLoading: summaryLoading } = useQuery<DashboardSummary>({
     queryKey: ["/api/dashboard/summary", { accountIds }],
-    enabled: accounts.length > 0,
+    enabled: true, // Always fetch dashboard data
     staleTime: 0,
     refetchOnMount: true,
     refetchOnWindowFocus: true,
+    cacheTime: 0,
   });
 
   const { data: alerts = [] } = useQuery<Alert[]>({
-    queryKey: ["/api/alerts", { accountIds: accountIds.split(","), unreadOnly: false }],
+    queryKey: ["/api/alerts", { accountIds, unreadOnly: false }],
     enabled: accounts.length > 0,
   });
 
   const { data: costTrends = [] } = useQuery<Cost[]>({
-    queryKey: ["/api/costs/trends", { accountIds: accountIds.split(",") }],
+    queryKey: ["/api/costs/trends", { accountIds }],
     enabled: accounts.length > 0,
   });
 
@@ -61,7 +62,7 @@ export function Dashboard() {
     ];
 
     return Object.entries(summary.resourceBreakdown).map(([name, value], index) => ({
-      name: name.replace(/-/g, " ").toUpperCase(),
+      name: name.replace(/-/g, " ").replace(/\b\w/g, l => l.toUpperCase()), // Title Case
       value,
       color: colors[index % colors.length],
     }));
@@ -281,7 +282,7 @@ export function Dashboard() {
             <button className="text-sm text-primary hover:text-primary/80">View Details</button>
           </CardHeader>
           <CardContent>
-            <ResourceDistributionChart data={resourceData} className="h-64" />
+            <ResourceDistributionChart data={resourceData} className="h-72" />
           </CardContent>
         </Card>
       </div>

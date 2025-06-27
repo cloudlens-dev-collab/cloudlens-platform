@@ -1,5 +1,5 @@
 import express, { type Request, Response, NextFunction } from "express";
-import { registerRoutes } from "./routes-clean";
+import { registerRoutes } from "./routes-final";
 import { setupVite, serveStatic, log } from "./vite";
 
 const app = express();
@@ -59,10 +59,7 @@ app.use((req, res, next) => {
   // ALWAYS serve the app on port 5001
   // this serves both the API and the client.
   const port = 5001;
-  server.listen({
-    port,
-    host: "localhost",
-  }, () => {
+  server.listen(port, "0.0.0.0", () => {
     log(`serving on port ${port}`);
   });
 })();
