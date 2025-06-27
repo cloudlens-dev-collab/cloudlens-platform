@@ -21,7 +21,6 @@ server/public
 *.db
 *.sqlite
 *.sqlite3
-server/database.db
 
 # Logs (may contain sensitive information)
 *.log
