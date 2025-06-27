@@ -18,6 +18,7 @@ interface AccountProviderProps {
 
 export function AccountProvider({ children }: AccountProviderProps) {
   const [selectedAccount, setSelectedAccount] = useState<Account | "all">("all");
+  const [hasUserSelected, setHasUserSelected] = useState(false);
   const queryClient = useQueryClient();
 
   const { data: accounts = [], isLoading } = useQuery<Account[]>({
@@ -29,21 +30,27 @@ export function AccountProvider({ children }: AccountProviderProps) {
     queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
   };
 
-  // Auto-select AWS account (which has cost data) if none selected and accounts are loaded
+  // Auto-select AWS account only on initial load (not when user explicitly selects "all")
   useEffect(() => {
-    if (selectedAccount === "all" && accounts.length > 0) {
-      // Find AWS account which has cost data
+    if (!hasUserSelected && selectedAccount === "all" && accounts.length > 0) {
+      // Only auto-select on initial load, not when user manually selects "all"
       const awsAccount = accounts.find(acc => acc.provider === 'aws');
       if (awsAccount) {
         setSelectedAccount(awsAccount);
       }
     }
-  }, [accounts, selectedAccount]);
+  }, [accounts, hasUserSelected, selectedAccount]);
+
+  // Wrapper function to track user selections
+  const handleSetSelectedAccount = (account: Account | "all") => {
+    setHasUserSelected(true);
+    setSelectedAccount(account);
+  };
 
   const value: AccountContextType = {
     selectedAccount,
     accounts,
-    setSelectedAccount,
+    setSelectedAccount: handleSetSelectedAccount,
     refreshAccounts,
     isLoading,
   };
