@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
-import { Send, BarChart3, Server, Lightbulb, Paperclip, RotateCcw } from "lucide-react";
+import { Send, BarChart3, Server, Lightbulb, Paperclip, RotateCcw, TrendingUp, PieChart } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAccount } from "@/contexts/AccountContext";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -39,13 +39,27 @@ export function Chat() {
       model: string;
       accountContext: string;
     }) => {
+      const accountIds = selectedAccount === "all" 
+        ? accounts.map(acc => acc.id)
+        : [selectedAccount.id];
+        
+      const currentAccount = selectedAccount === "all" 
+        ? "All Accounts"
+        : selectedAccount.name;
+
       return apiRequest("POST", `/api/chat/${sessionId}`, {
         message,
         model,
+        accountIds,
+        currentAccount,
         accountContext,
       });
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
+      // If the response includes visualizations, we need to handle them
+      if (data?.assistantMessage?.visualizations) {
+        console.log("📊 Received visualizations:", data.assistantMessage.visualizations);
+      }
       queryClient.invalidateQueries({ queryKey: [`/api/chat/${sessionId}`] });
       setMessage("");
     },
@@ -164,6 +178,124 @@ export function Chat() {
     return <p className="whitespace-pre-wrap">{content}</p>;
   };
 
+  const renderVisualization = (viz: any) => {
+    switch (viz.type) {
+      case 'metric':
+        return (
+          <Card className="mb-4">
+            <CardContent className="p-4">
+              <div className="text-center">
+                <div className="text-3xl font-bold text-primary">{viz.data.value}</div>
+                <div className="text-sm text-gray-600">{viz.data.label}</div>
+              </div>
+            </CardContent>
+          </Card>
+        );
+      
+      case 'bar':
+        return (
+          <Card className="mb-4">
+            <CardHeader>
+              <CardTitle className="flex items-center text-sm">
+                <BarChart3 className="w-4 h-4 mr-2" />
+                {viz.title}
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-2">
+                {viz.data.labels.map((label: string, idx: number) => (
+                  <div key={idx} className="flex items-center justify-between">
+                    <span className="text-sm">{label}</span>
+                    <div className="flex items-center space-x-2">
+                      <div className="w-32 bg-gray-200 rounded-full h-2">
+                        <div 
+                          className="bg-yellow-500 h-2 rounded-full" 
+                          style={{ 
+                            width: `${(viz.data.datasets[0].data[idx] / Math.max(...viz.data.datasets[0].data)) * 100}%` 
+                          }}
+                        />
+                      </div>
+                      <span className="text-sm font-medium w-8">{viz.data.datasets[0].data[idx]}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        );
+      
+      case 'pie':
+        return (
+          <Card className="mb-4">
+            <CardHeader>
+              <CardTitle className="flex items-center text-sm">
+                <PieChart className="w-4 h-4 mr-2" />
+                {viz.title}
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-2">
+                {viz.data.labels.map((label: string, idx: number) => (
+                  <div key={idx} className="flex items-center justify-between">
+                    <div className="flex items-center space-x-2">
+                      <div 
+                        className="w-3 h-3 rounded-full" 
+                        style={{ backgroundColor: viz.data.datasets[0].backgroundColor[idx] || '#3b82f6' }}
+                      />
+                      <span className="text-sm">{label}</span>
+                    </div>
+                    <span className="text-sm font-medium">{viz.data.datasets[0].data[idx]}</span>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        );
+      
+      case 'table':
+        return (
+          <Card className="mb-4">
+            <CardHeader>
+              <CardTitle className="text-sm">{viz.title}</CardTitle>
+              {viz.description && (
+                <p className="text-xs text-gray-600">{viz.description}</p>
+              )}
+            </CardHeader>
+            <CardContent>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm border-collapse">
+                  <thead>
+                    <tr className="border-b">
+                      {viz.data.headers.map((header: string, idx: number) => (
+                        <th key={idx} className="text-left p-2 font-medium">{header}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {viz.data.rows.slice(0, 10).map((row: any, idx: number) => (
+                      <tr key={idx} className="border-b">
+                        {viz.data.headers.map((header: string, cellIdx: number) => (
+                          <td key={cellIdx} className="p-2">{row[header]}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {viz.data.rows.length > 10 && (
+                  <p className="text-xs text-gray-500 mt-2">
+                    Showing first 10 of {viz.data.rows.length} entries
+                  </p>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        );
+      
+      default:
+        return null;
+    }
+  };
+
   return (
     <div className="h-screen flex flex-col p-4">
       {/* AI Model Selection */}
@@ -248,14 +380,27 @@ export function Chat() {
                 )}
                 
                 <div className={`flex-1 ${msg.role === "user" ? "max-w-md" : ""}`}>
-                  <div
-                    className={`rounded-lg p-4 ${
-                      msg.role === "user"
-                        ? "bg-primary text-white ml-auto"
-                        : "bg-gray-100 text-gray-900"
-                    }`}
-                  >
-                    {formatMessageContent(msg.content)}
+                  <div className="space-y-3">
+                    <div
+                      className={`rounded-lg p-4 ${
+                        msg.role === "user"
+                          ? "bg-primary text-white ml-auto"
+                          : "bg-gray-100 text-gray-900"
+                      }`}
+                    >
+                      {formatMessageContent(msg.content)}
+                    </div>
+                    
+                    {/* Render visualizations for assistant messages */}
+                    {msg.role === "assistant" && (msg as any).visualizations && (
+                      <div className="space-y-3">
+                        {(msg as any).visualizations.map((viz: any, vizIdx: number) => (
+                          <div key={vizIdx}>
+                            {renderVisualization(viz)}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                   <p className={`text-xs text-gray-500 mt-2 ${
                     msg.role === "user" ? "text-right" : ""

@@ -3,7 +3,7 @@ import { createServer, Server } from "http";
 import { z } from "zod";
 import { storage } from "./storage";
 import { llmService } from "./services/llm";
-import { sqlAgent } from "./agents/sql-agent";
+import { langGraphOrchestrator } from "./agents/langgraph-orchestrator";
 
 function isInfrastructureQuery(message: string): boolean {
   const infraKeywords = [
@@ -28,13 +28,14 @@ function isInfrastructureQuery(message: string): boolean {
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
-  // Advanced SQL Agent Chat endpoint with memory and task planning
+  // LangGraph Orchestrated Chat endpoint with rich visualizations
   app.post("/api/chat/:sessionId", async (req: Request, res: Response) => {
     try {
       const { sessionId } = req.params;
-      const { message, model = "claude", accountIds } = req.body;
+      const { message, model = "claude", accountIds, currentAccount = "All Accounts" } = req.body;
 
-      console.log(`🤖 SQL AGENT: User "${sessionId}" asked: "${message}" with model: ${model}, accounts: ${accountIds || 'all'}`);
+      console.log(`🎯 LANGGRAPH CHAT: User "${sessionId}" asked: "${message}"`);
+      console.log(`📍 CONTEXT: Current account = "${currentAccount}", Target accounts = ${accountIds || 'all'}`);
 
       // Store user message
       await storage.createChatMessage({
@@ -45,33 +46,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
         usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 }
       });
 
-      // Determine account context
+      // Determine account context based on current account selection
       const allAccounts = await storage.getAccounts();
-      const targetAccountIds = accountIds === "all" || !accountIds ? 
+      let targetAccountIds = accountIds === "all" || !accountIds ? 
         allAccounts.map(acc => acc.id) : 
         (Array.isArray(accountIds) ? accountIds : [accountIds]);
 
-      // Use SQL Agent for comprehensive analysis with memory and task planning
-      const agentResult = await sqlAgent.processQuery(sessionId, message, targetAccountIds);
-      
-      let response;
-
-      if (agentResult.needsPermission) {
-        // Agent needs user permission for tasks
-        response = {
-          content: agentResult.response,
-          suggestedTasks: agentResult.suggestedTasks,
-          needsPermission: true,
-          usage: { promptTokens: 100, completionTokens: 200, totalTokens: 300 }
-        };
-      } else {
-        // Agent completed analysis
-        response = {
-          content: agentResult.response,
-          context: agentResult.context,
-          usage: { promptTokens: 150, completionTokens: 300, totalTokens: 450 }
-        };
+      // If user is in a specific account context, override targetAccountIds
+      if (currentAccount !== "All Accounts") {
+        const currentAccountData = allAccounts.find(acc => acc.name === currentAccount);
+        if (currentAccountData) {
+          targetAccountIds = [currentAccountData.id];
+          console.log(`🎯 ACCOUNT FOCUS: Limiting analysis to account "${currentAccount}" (ID: ${currentAccountData.id})`);
+        }
       }
+
+      // Use LangGraph orchestrator for comprehensive analysis
+      const result = await langGraphOrchestrator.processQuery(
+        sessionId, 
+        message, 
+        targetAccountIds,
+        currentAccount
+      );
+      
+      const response = {
+        content: result.response,
+        visualizations: result.visualizations,
+        context: result.context,
+        usage: { promptTokens: 200, completionTokens: 400, totalTokens: 600 }
+      };
 
       // Store assistant response
       const assistantMessage = await storage.createChatMessage({
@@ -82,7 +85,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         usage: response.usage
       });
 
+      // Add visualizations to the assistant message
+      const enrichedAssistantMessage = {
+        ...assistantMessage,
+        visualizations: response.visualizations || []
+      };
+
       console.log(`📊 TOKENS: ${response.usage.totalTokens} total (${response.usage.promptTokens} prompt + ${response.usage.completionTokens} completion)`);
+      console.log(`📈 VISUALIZATIONS: Generated ${response.visualizations?.length || 0} charts/tables`);
       console.log(`📤 RESPONSE: Sent ${response.content.length} characters to user`);
 
       res.json({
@@ -95,7 +105,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
           timestamp: new Date()
         },
-        assistantMessage
+        assistantMessage: enrichedAssistantMessage
       });
 
     } catch (error) {
