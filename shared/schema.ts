@@ -30,6 +30,7 @@ export const resources = pgTable("resources", {
   region: text("region"),
   metadata: jsonb("metadata"),
   monthlyCost: decimal("monthly_cost", { precision: 10, scale: 2 }),
+  costBreakdown: jsonb("cost_breakdown"), // Store detailed cost breakdown by service and usage type
   lastUpdated: timestamp("last_updated").notNull().defaultNow(),
 });
 
@@ -61,6 +62,7 @@ export const chatMessages = pgTable("chat_messages", {
   content: text("content").notNull(),
   model: text("model"), // 'openai', 'claude', 'gemini', 'perplexity'
   accountContext: text("account_context"), // JSON string of account IDs in context
+  visualizations: jsonb("visualizations"), // Array of chart/table visualizations
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 

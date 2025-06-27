@@ -1,6 +1,7 @@
 import { db } from "../db";
 import { accounts, resources, costs } from "../../shared/schema";
 import { eq, and, inArray } from "drizzle-orm";
+import { storage } from "../storage";
 
 interface VisualizationData {
   type: 'bar' | 'pie' | 'line' | 'table' | 'metric';
@@ -15,9 +16,19 @@ class SimpleOrchestrator {
   async processQuery(sessionId: string, query: string, accountIds: number[], currentAccount: string) {
     console.log(`🎯 SIMPLE ORCHESTRATOR: Processing "${query}" for session ${sessionId}`);
     
+    // Get recent conversation history for context
+    const recentMessages = await storage.getChatMessages(sessionId);
+    const lastFewMessages = recentMessages.slice(-6).map(msg => msg.content).join(' ').toLowerCase();
+    
     // Check if this is a permission response
     if (this.isPermissionResponse(query)) {
       return await this.handlePermissionResponse(sessionId, query, accountIds, currentAccount);
+    }
+    
+    // Check if this is a follow-up query that doesn't need permission
+    if (this.isFollowUpQuery(query, lastFewMessages)) {
+      console.log(`🔄 FOLLOW-UP DETECTED: Skipping permission for contextual query`);
+      return await this.executeAnalysis(query, accountIds, currentAccount);
     }
     
     // Check if this requires permission
@@ -35,6 +46,28 @@ class SimpleOrchestrator {
     const noPatterns = ['no', 'stop', 'cancel', 'abort', 'don\'t', 'skip', 'n'];
     
     return yesPatterns.includes(lowerQuery) || noPatterns.includes(lowerQuery);
+  }
+
+  private isFollowUpQuery(query: string, conversationHistory: string): boolean {
+    const lowerQuery = query.toLowerCase().trim();
+    
+    console.log(`🔍 FOLLOW-UP CHECK: Query="${lowerQuery}"`);
+    console.log(`📝 CONVERSATION HISTORY: "${conversationHistory.slice(-200)}..."`);
+    
+    // Simple follow-up detection
+    const isFollowUp = (
+      // References to previous content
+      lowerQuery.includes('those') || 
+      lowerQuery.includes('them') || 
+      lowerQuery.includes('these') ||
+      lowerQuery.includes('show me all') ||
+      lowerQuery.includes('what are they') ||
+      // Recent infrastructure context exists
+      conversationHistory.includes('instances')
+    ) && conversationHistory.includes('stopped');
+    
+    console.log(`✅ FOLLOW-UP RESULT: ${isFollowUp}`);
+    return isFollowUp;
   }
 
   private async handlePermissionResponse(sessionId: string, query: string, accountIds: number[], currentAccount: string) {
@@ -135,11 +168,28 @@ This approach ensures I give you exactly the information you need while being tr
 
   private async executeAnalysis(query: string, accountIds: number[], currentAccount: string) {
     console.log("🔄 EXECUTING ANALYSIS");
+    console.log(`🎯 TOOL SELECTION: Query="${query}"`);
+    console.log(`🏢 TARGET ACCOUNTS: ${accountIds}`);
+    
+    // Extract instance ID if present in query
+    const instanceIdMatch = query.match(/i-[a-f0-9]{8,17}/i);
+    
+    if (instanceIdMatch) {
+      console.log("🔧 CALLING TOOL: lookupResourceDetails");
+      return await this.lookupResourceDetails(instanceIdMatch[0], accountIds, query);
+    }
     
     if (query.toLowerCase().includes('stopped') || query.toLowerCase().includes('instances')) {
+      console.log("🔧 CALLING TOOL: analyzeStoppedInstances");
       return await this.analyzeStoppedInstances(accountIds, currentAccount);
     }
     
+    if (query.toLowerCase().includes('cost') || query.toLowerCase().includes('spend') || query.toLowerCase().includes('bill')) {
+      console.log("🔧 CALLING TOOL: analyzeCosts");
+      return await this.analyzeCosts(accountIds, currentAccount);
+    }
+    
+    console.log("🔧 CALLING TOOL: defaultAnalysis (no specific tool matched)");
     // Default analysis
     return {
       response: "Analysis completed successfully!",
@@ -149,12 +199,15 @@ This approach ensures I give you exactly the information you need while being tr
   }
 
   private async analyzeStoppedInstances(accountIds: number[], currentAccount: string) {
-    // Fetch data
+    console.log("🗄️ DATABASE QUERY: Fetching accounts");
     const accountsData = await db
       .select()
       .from(accounts)
       .where(inArray(accounts.id, accountIds));
+    
+    console.log(`📊 FOUND ACCOUNTS: ${accountsData.length}`);
 
+    console.log("🗄️ DATABASE QUERY: Fetching stopped EC2 instances");
     const stoppedInstances = await db
       .select()
       .from(resources)
@@ -163,6 +216,8 @@ This approach ensures I give you exactly the information you need while being tr
         eq(resources.type, 'ec2-instance'),
         eq(resources.status, 'stopped')
       ));
+      
+    console.log(`🛑 FOUND STOPPED INSTANCES: ${stoppedInstances.length}`);
 
     // Generate visualizations
     const visualizations: VisualizationData[] = [];
@@ -282,6 +337,175 @@ The charts above show the distribution patterns and help identify optimization o
       visualizations,
       needsPermission: false
     };
+  }
+
+  private async lookupResourceDetails(resourceId: string, accountIds: number[], query: string) {
+    console.log(`🗄️ DATABASE QUERY: Looking up resource ${resourceId}`);
+    
+    try {
+      const resource = await db
+        .select()
+        .from(resources)
+        .where(and(
+          eq(resources.resourceId, resourceId),
+          inArray(resources.accountId, accountIds)
+        ))
+        .limit(1);
+
+      if (resource.length === 0) {
+        return {
+          response: `Resource ${resourceId} not found in the specified accounts.`,
+          visualizations: [],
+          needsPermission: false
+        };
+      }
+
+      const resourceData = resource[0];
+      console.log(`📊 FOUND RESOURCE: ${resourceData.name} (${resourceData.type})`);
+
+      // Extract what the user is asking for
+      const lowerQuery = query.toLowerCase();
+      let response = "";
+
+      if (lowerQuery.includes('created') || lowerQuery.includes('when')) {
+        const createdDate = resourceData.metadata?.launchTime || resourceData.lastUpdated;
+        response = `## 📅 Resource Creation Information
+
+**Instance ID**: ${resourceData.resourceId}
+**Name**: ${resourceData.name || 'Unnamed'}
+**Created**: ${new Date(createdDate).toLocaleDateString('en-US', { 
+          year: 'numeric', 
+          month: 'long', 
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit'
+        })}
+**Type**: ${resourceData.type}
+**Region**: ${resourceData.region}
+**Status**: ${resourceData.status}
+**Monthly Cost**: $${parseFloat(resourceData.monthlyCost || '0').toFixed(2)}
+
+### 🔍 Additional Details
+- **Account**: ${resourceData.accountId}
+- **Last Updated**: ${new Date(resourceData.lastUpdated).toLocaleDateString()}`;
+
+        if (resourceData.metadata?.instanceType) {
+          response += `\n- **Instance Type**: ${resourceData.metadata.instanceType}`;
+        }
+        if (resourceData.metadata?.availabilityZone) {
+          response += `\n- **Availability Zone**: ${resourceData.metadata.availabilityZone}`;
+        }
+      } else {
+        // General resource details
+        response = `## 🔍 Resource Details: ${resourceData.resourceId}
+
+**Name**: ${resourceData.name || 'Unnamed'}
+**Type**: ${resourceData.type}
+**Status**: ${resourceData.status}
+**Region**: ${resourceData.region}
+**Monthly Cost**: $${parseFloat(resourceData.monthlyCost || '0').toFixed(2)}
+**Last Updated**: ${new Date(resourceData.lastUpdated).toLocaleDateString()}
+
+### 📊 Metadata
+${resourceData.metadata ? JSON.stringify(resourceData.metadata, null, 2) : 'No additional metadata available'}`;
+      }
+
+      // Create a simple visualization with the resource details
+      const visualizations = [{
+        type: 'table' as const,
+        title: `Resource Details: ${resourceData.resourceId}`,
+        data: [{
+          'Resource ID': resourceData.resourceId,
+          'Name': resourceData.name || 'Unnamed',
+          'Type': resourceData.type,
+          'Status': resourceData.status,
+          'Region': resourceData.region,
+          'Monthly Cost': `$${parseFloat(resourceData.monthlyCost || '0').toFixed(2)}`,
+          'Created': resourceData.metadata?.launchTime ? 
+            new Date(resourceData.metadata.launchTime).toLocaleDateString() : 
+            'Unknown'
+        }]
+      }];
+
+      return {
+        response,
+        visualizations,
+        needsPermission: false
+      };
+
+    } catch (error) {
+      console.error(`❌ Error looking up resource ${resourceId}:`, error);
+      return {
+        response: `Error retrieving details for resource ${resourceId}: ${error.message}`,
+        visualizations: [],
+        needsPermission: false
+      };
+    }
+  }
+
+  private async analyzeCosts(accountIds: number[], currentAccount: string) {
+    console.log("🗄️ DATABASE QUERY: Fetching cost data");
+    
+    try {
+      const costsData = await db
+        .select()
+        .from(costs)
+        .where(inArray(costs.accountId, accountIds))
+        .orderBy(desc(costs.date))
+        .limit(100);
+
+      console.log(`💰 FOUND COST RECORDS: ${costsData.length}`);
+
+      const totalCost = costsData.reduce((sum, cost) => sum + parseFloat(cost.amount), 0);
+      
+      // Group by service
+      const serviceBreakdown = costsData.reduce((acc, cost) => {
+        const service = cost.service || 'Unknown';
+        acc[service] = (acc[service] || 0) + parseFloat(cost.amount);
+        return acc;
+      }, {} as Record<string, number>);
+
+      const topServices = Object.entries(serviceBreakdown)
+        .map(([service, amount]) => ({ service, amount: parseFloat(amount.toFixed(2)) }))
+        .sort((a, b) => b.amount - a.amount)
+        .slice(0, 5);
+
+      const response = `## 💰 Cost Analysis - ${currentAccount}
+
+**Total Cost**: $${totalCost.toFixed(2)}
+**Cost Records**: ${costsData.length}
+**Top Services**: ${topServices.length}
+
+### 🏆 Top Cost Drivers
+${topServices.map((service, i) => 
+  `${i + 1}. **${service.service}**: $${service.amount}`
+).join('\n')}
+
+### 📊 Cost Distribution
+The charts below show your cost breakdown by service and trends over time.`;
+
+      const visualizations = [
+        {
+          type: 'pie' as const,
+          title: 'Cost by Service',
+          data: topServices.map(s => ({ name: s.service, value: s.amount }))
+        }
+      ];
+
+      return {
+        response,
+        visualizations,
+        needsPermission: false
+      };
+
+    } catch (error) {
+      console.error("❌ Error analyzing costs:", error);
+      return {
+        response: `Error analyzing costs: ${error.message}`,
+        visualizations: [],
+        needsPermission: false
+      };
+    }
   }
 
   private groupBy(array: any[], key: string): Record<string, any[]> {

@@ -7,9 +7,15 @@ import { LambdaClient, ListFunctionsCommand } from "@aws-sdk/client-lambda";
 import { ElasticLoadBalancingV2Client, DescribeLoadBalancersCommand } from "@aws-sdk/client-elastic-load-balancing-v2";
 import { AutoScalingClient, DescribeAutoScalingGroupsCommand } from "@aws-sdk/client-auto-scaling";
 import type { Account, Resource, Cost } from "@shared/schema";
+import { createLogger } from './logger';
+import { withRetry, handleAWSError, CircuitBreaker } from './error-handler';
+import { caches, cacheKeys } from './cache';
+import { sanitize, validateDataQuality } from './validation';
 
 export class AWSService {
   private clients: Map<string, any> = new Map();
+  private logger = createLogger('AWSService');
+  private circuitBreakers: Map<string, CircuitBreaker> = new Map();
 
   private async getCredentials(account: Account) {
     const credentials = account.credentials as any;
@@ -55,6 +61,12 @@ export class AWSService {
     const clientKey = `${account.id}-${service}-${region}`;
     
     if (!this.clients.has(clientKey)) {
+      this.logger.debug('Creating AWS client', { 
+        accountName: account.name,
+        service,
+        region 
+      });
+      
       const credentials = await this.getCredentials(account);
       
       let client;
@@ -81,16 +93,32 @@ export class AWSService {
           client = new AutoScalingClient({ region, credentials });
           break;
         default:
+          this.logger.error('Unsupported AWS service requested', { service });
           throw new Error(`Unsupported AWS service: ${service}`);
       }
       
       this.clients.set(clientKey, client);
+      this.logger.info('AWS client created', { 
+        accountName: account.name,
+        service,
+        region 
+      });
     }
     
     return this.clients.get(clientKey);
   }
+  
+  private getCircuitBreaker(service: string): CircuitBreaker {
+    if (!this.circuitBreakers.has(service)) {
+      this.circuitBreakers.set(service, new CircuitBreaker(`aws-${service}`));
+    }
+    return this.circuitBreakers.get(service)!;
+  }
 
   async syncResources(account: Account): Promise<Resource[]> {
+    this.logger.sync(account.name, 'started', { provider: 'aws' });
+    const startTime = Date.now();
+    
     const resources: Resource[] = [];
     // Prioritize primary regions first, then expand to others
     const regions = [
@@ -100,11 +128,39 @@ export class AWSService {
     ];
     
     // Fetch actual month-to-date costs first to apply to resources
-    console.log("🔍 Fetching month-to-date accrued costs from AWS Cost Explorer...");
-    const actualCosts = await this.getResourceCosts(account);
+    this.logger.info('Fetching month-to-date costs from AWS Cost Explorer', {
+      accountName: account.name
+    });
+    
+    let actualCosts: Map<string, number>;
+    let costBreakdowns: Map<string, any>;
     
     try {
-      console.log(`Scanning AWS account ${account.name} across regions: ${regions.join(', ')}`);
+      actualCosts = await withRetry(
+        () => this.getResourceCosts(account),
+        'getResourceCosts',
+        { maxAttempts: 3 }
+      );
+      
+      costBreakdowns = await withRetry(
+        () => this.getResourceCostBreakdown(account),
+        'getResourceCostBreakdown',
+        { maxAttempts: 3 }
+      );
+    } catch (error) {
+      this.logger.warn('Failed to fetch cost data, continuing without costs', error, {
+        accountName: account.name
+      });
+      actualCosts = new Map();
+      costBreakdowns = new Map();
+    }
+    
+    try {
+      this.logger.info('Starting AWS resource scan', {
+        accountName: account.name,
+        regions: regions.length,
+        hasCostData: actualCosts.size > 0
+      });
       
       // Sync S3 buckets (global service)
       const s3Resources = await this.syncS3Buckets(account, actualCosts);
@@ -117,7 +173,7 @@ export class AWSService {
         
         try {
           // EC2 instances in this region
-          const ec2Resources = await this.syncEC2InstancesInRegion(account, region, actualCosts);
+          const ec2Resources = await this.syncEC2InstancesInRegion(account, region, actualCosts, costBreakdowns);
           resources.push(...ec2Resources);
           console.log(`Found ${ec2Resources.length} EC2 instances in ${region}`);
         } catch (error) {
@@ -236,7 +292,7 @@ export class AWSService {
     return resources;
   }
 
-  private async syncEC2InstancesInRegion(account: Account, region: string, actualCosts: Map<string, number>): Promise<Resource[]> {
+  private async syncEC2InstancesInRegion(account: Account, region: string, actualCosts: Map<string, number>, costBreakdowns: Map<string, any>): Promise<Resource[]> {
     const ec2Client = await this.getClient(account, "ec2", region);
     const resources: Resource[] = [];
 
@@ -253,8 +309,17 @@ export class AWSService {
           const actualCost = actualCosts.get(resourceId);
           const monthlyCost = actualCost ? actualCost.toFixed(2) : null;
           
+          // Get detailed cost breakdown
+          const breakdown = costBreakdowns.get(resourceId);
+          
           if (actualCost) {
             console.log(`💰 Actual cost for ${resourceId}: $${actualCost.toFixed(2)}`);
+            if (breakdown) {
+              console.log(`📊 Cost breakdown for ${resourceId}:`, {
+                services: Object.keys(breakdown.services),
+                usageTypes: Object.keys(breakdown.usageTypes)
+              });
+            }
           } else {
             console.log(`📊 No cost data available for ${resourceId} from AWS Cost Explorer`);
           }
@@ -291,6 +356,7 @@ export class AWSService {
               ebsOptimized: instance.EbsOptimized,
             },
             monthlyCost: monthlyCost,
+            costBreakdown: breakdown || null,
             lastUpdated: new Date(),
           });
         }
@@ -858,6 +924,114 @@ export class AWSService {
     }
 
     return resourceCosts;
+  }
+
+  // Get detailed cost breakdown by service and usage type for resources
+  async getResourceCostBreakdown(account: Account): Promise<Map<string, any>> {
+    const costExplorerClient = await this.getClient(account, "cost-explorer");
+    const resourceBreakdowns = new Map<string, any>();
+
+    try {
+      const now = new Date();
+      const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      const today = new Date();
+
+      console.log(`🔍 Fetching detailed cost breakdown for current month: ${currentMonthStart.toISOString().split('T')[0]} to ${today.toISOString().split('T')[0]}`);
+
+      // Get costs grouped by Resource ID and Service
+      const serviceBreakdownCommand = new GetCostAndUsageCommand({
+        TimePeriod: {
+          Start: currentMonthStart.toISOString().split('T')[0],
+          End: today.toISOString().split('T')[0],
+        },
+        Granularity: "DAILY",
+        Metrics: ["UnblendedCost"],
+        GroupBy: [
+          {
+            Type: "DIMENSION",
+            Key: "RESOURCE_ID",
+          },
+          {
+            Type: "DIMENSION",
+            Key: "SERVICE",
+          },
+        ],
+      });
+
+      const serviceResponse = await costExplorerClient.send(serviceBreakdownCommand);
+
+      // Aggregate costs by resource and service
+      for (const result of serviceResponse.ResultsByTime || []) {
+        for (const group of result.Groups || []) {
+          const [resourceId, service] = group.Keys || [];
+          const dailyAmount = parseFloat(group.Metrics?.UnblendedCost?.Amount || "0");
+          
+          if (resourceId && service && dailyAmount > 0) {
+            if (!resourceBreakdowns.has(resourceId)) {
+              resourceBreakdowns.set(resourceId, {
+                totalCost: 0,
+                services: {},
+                usageTypes: {},
+                dailyCosts: []
+              });
+            }
+            
+            const breakdown = resourceBreakdowns.get(resourceId);
+            breakdown.totalCost += dailyAmount;
+            breakdown.services[service] = (breakdown.services[service] || 0) + dailyAmount;
+            
+            // Store daily cost data
+            breakdown.dailyCosts.push({
+              date: result.TimePeriod?.Start,
+              service,
+              cost: dailyAmount
+            });
+          }
+        }
+      }
+
+      // Get costs grouped by Resource ID and Usage Type
+      const usageTypeCommand = new GetCostAndUsageCommand({
+        TimePeriod: {
+          Start: currentMonthStart.toISOString().split('T')[0],
+          End: today.toISOString().split('T')[0],
+        },
+        Granularity: "DAILY",
+        Metrics: ["UnblendedCost"],
+        GroupBy: [
+          {
+            Type: "DIMENSION",
+            Key: "RESOURCE_ID",
+          },
+          {
+            Type: "DIMENSION",
+            Key: "USAGE_TYPE",
+          },
+        ],
+      });
+
+      const usageResponse = await costExplorerClient.send(usageTypeCommand);
+
+      // Add usage type breakdown
+      for (const result of usageResponse.ResultsByTime || []) {
+        for (const group of result.Groups || []) {
+          const [resourceId, usageType] = group.Keys || [];
+          const dailyAmount = parseFloat(group.Metrics?.UnblendedCost?.Amount || "0");
+          
+          if (resourceId && usageType && dailyAmount > 0 && resourceBreakdowns.has(resourceId)) {
+            const breakdown = resourceBreakdowns.get(resourceId);
+            breakdown.usageTypes[usageType] = (breakdown.usageTypes[usageType] || 0) + dailyAmount;
+          }
+        }
+      }
+
+      console.log(`💰 Fetched detailed cost breakdowns for ${resourceBreakdowns.size} resources`);
+    } catch (error) {
+      console.error("Error fetching detailed cost breakdown from AWS:", error);
+      console.error("Cost Explorer API may not be available or permissions insufficient");
+    }
+
+    return resourceBreakdowns;
   }
 
 

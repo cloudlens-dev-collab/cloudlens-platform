@@ -176,6 +176,10 @@ export class MemStorage implements IStorage {
     return resources;
   }
 
+  async getResourceByResourceId(resourceId: string): Promise<Resource | undefined> {
+    return Array.from(this.resources.values()).find(resource => resource.resourceId === resourceId);
+  }
+
   async createResource(insertResource: InsertResource): Promise<Resource> {
     const id = this.currentId.resources++;
     const resource: Resource = { 

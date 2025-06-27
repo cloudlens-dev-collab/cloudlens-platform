@@ -14,8 +14,12 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
+import { CostBreakdown } from "@/components/CostBreakdown";
+import { EnhancedResourceTable } from "@/components/EnhancedResourceTable";
+import { CostOptimizationEngine } from "@/components/CostOptimizationEngine";
 import type { Resource } from "@/types";
 
 export function Resources() {
@@ -32,6 +36,7 @@ export function Resources() {
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedResource, setSelectedResource] = useState<Resource | null>(null);
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
+  const [viewMode, setViewMode] = useState<"enhanced" | "legacy">("enhanced");
   const itemsPerPage = 20;
 
   // Debounce search query
@@ -290,303 +295,348 @@ export function Resources() {
 
   return (
     <div className="p-6">
-      {/* Search and Filters */}
-      <Card className="mb-6">
-        <CardContent className="p-6">
-          <div className="flex flex-col lg:flex-row lg:items-center space-y-4 lg:space-y-0 lg:space-x-4">
-            <div className="flex-1 relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
-              <Input
-                placeholder="Search resources by name, type, region, or metadata..."
-                className="pl-10"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-              />
-            </div>
-            <div className="flex space-x-3">
-              <Select value={selectedProvider} onValueChange={setSelectedProvider}>
-                <SelectTrigger className="w-40">
-                  <SelectValue placeholder="All Providers" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Providers</SelectItem>
-                  <SelectItem value="aws">AWS</SelectItem>
-                  <SelectItem value="azure">Azure</SelectItem>
-                  <SelectItem value="snowflake">Snowflake</SelectItem>
-                </SelectContent>
-              </Select>
-
-              <Select value={selectedType} onValueChange={setSelectedType}>
-                <SelectTrigger className="w-40">
-                  <SelectValue placeholder="All Types" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Types</SelectItem>
-                  {uniqueTypes.map((type) => (
-                    <SelectItem key={type} value={type}>
-                      {formatResourceType(type)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-
-              <Select value={selectedStatus} onValueChange={setSelectedStatus}>
-                <SelectTrigger className="w-32">
-                  <SelectValue placeholder="All Status" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Status</SelectItem>
-                  {uniqueStatuses.map((status) => (
-                    <SelectItem key={status} value={status}>
-                      {status.charAt(0).toUpperCase() + status.slice(1)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Resources Table */}
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+      <Tabs defaultValue="resources" className="space-y-6">
+        <div className="flex items-center justify-between">
           <div>
-            <CardTitle className="text-lg font-semibold">Resource Inventory</CardTitle>
-            <p className="text-sm text-gray-600 mt-1">
-              Showing {paginatedResources.length} of {resources.length} resources
-              {sortBy !== 'name' && (
-                <span className="ml-2 text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded">
-                  Sorted by {sortBy} ({sortOrder})
-                </span>
-              )}
+            <h1 className="text-3xl font-bold">Cloud Resources</h1>
+            <p className="text-gray-600 mt-1">
+              Manage and optimize your cloud infrastructure with enterprise-grade insights
             </p>
           </div>
-          <div className="flex items-center space-x-3">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => refetch()}
-              disabled={isLoading}
-            >
-              <RefreshCw className={`w-4 h-4 mr-2 ${isLoading ? "animate-spin" : ""}`} />
-              Refresh
-            </Button>
-            <Button variant="outline" size="sm">
-              <Download className="w-4 h-4 mr-2" />
-              Export
-            </Button>
-          </div>
-        </CardHeader>
-        <CardContent className="p-0">
-          {isLoading ? (
-            <div className="p-8 text-center">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto"></div>
-              <p className="mt-2 text-gray-600">Loading resources...</p>
-            </div>
-          ) : paginatedResources.length === 0 ? (
-            <div className="p-8 text-center text-gray-500">
-              <Search className="w-12 h-12 mx-auto mb-4 text-gray-300" />
-              <p className="text-lg font-medium">No resources found</p>
-              <p className="text-sm">Try adjusting your search criteria or sync your accounts</p>
-            </div>
+          <Button 
+            variant="outline" 
+            size="sm"
+            onClick={() => setViewMode(viewMode === "enhanced" ? "legacy" : "enhanced")}
+          >
+            {viewMode === "enhanced" ? "Legacy View" : "Enhanced View"}
+          </Button>
+        </div>
+        
+        <TabsList className="grid w-full grid-cols-2">
+          <TabsTrigger value="resources">Resource Management</TabsTrigger>
+          <TabsTrigger value="optimization">Cost Optimization</TabsTrigger>
+        </TabsList>
+        
+        <TabsContent value="resources">
+          {viewMode === "enhanced" ? (
+            <EnhancedResourceTable
+              resources={resources}
+              accounts={accounts}
+              onViewDetails={handleViewDetails}
+              onSyncAccount={handleSyncAccount}
+              isLoading={isLoading}
+              isSyncing={syncMutation.isPending}
+            />
           ) : (
             <>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>
-                      <button
-                        className="flex items-center space-x-1 hover:text-primary font-medium"
-                        onClick={() => handleSort('name')}
-                      >
-                        <span>Resource</span>
-                        {getSortIcon('name')}
-                      </button>
-                    </TableHead>
-                    <TableHead>
-                      <button
-                        className="flex items-center space-x-1 hover:text-primary font-medium"
-                        onClick={() => handleSort('provider')}
-                      >
-                        <span>Provider</span>
-                        {getSortIcon('provider')}
-                      </button>
-                    </TableHead>
-                    <TableHead>
-                      <button
-                        className="flex items-center space-x-1 hover:text-primary font-medium"
-                        onClick={() => handleSort('type')}
-                      >
-                        <span>Type</span>
-                        {getSortIcon('type')}
-                      </button>
-                    </TableHead>
-                    <TableHead>
-                      <button
-                        className="flex items-center space-x-1 hover:text-primary font-medium"
-                        onClick={() => handleSort('status')}
-                      >
-                        <span>Status</span>
-                        {getSortIcon('status')}
-                      </button>
-                    </TableHead>
-                    <TableHead>
-                      <button
-                        className="flex items-center space-x-1 hover:text-primary font-medium"
-                        onClick={() => handleSort('monthlyCost')}
-                      >
-                        <span>Cost (Month-to-Date)</span>
-                        {getSortIcon('monthlyCost')}
-                      </button>
-                    </TableHead>
-                    <TableHead>
-                      <button
-                        className="flex items-center space-x-1 hover:text-primary font-medium"
-                        onClick={() => handleSort('region')}
-                      >
-                        <span>Region</span>
-                        {getSortIcon('region')}
-                      </button>
-                    </TableHead>
-                    <TableHead className="w-[100px]">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {paginatedResources.map((resource) => {
-                    const account = accounts.find(acc => acc.id === resource.accountId);
-                    return (
-                      <TableRow key={resource.id}>
-                        <TableCell>
-                          <div className="flex items-center space-x-3">
-                            <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center">
-                              {getProviderIcon(resource.provider)}
-                            </div>
-                            <div>
-                              <div className="font-medium text-gray-900">{resource.name}</div>
-                              <div className="text-sm text-gray-500 font-mono text-xs">
-                                {resource.resourceId.length > 30 ? 
-                                  `${resource.resourceId.substring(0, 30)}...` : 
-                                  resource.resourceId
-                                }
-                              </div>
-                            </div>
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center space-x-2">
-                            {getProviderIcon(resource.provider)}
-                            <span className="text-sm">{resource.provider.toUpperCase()}</span>
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <Badge className={getTypeBadgeColor(resource.type)}>
-                            {formatResourceType(resource.type)}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant={getStatusBadgeVariant(resource.status)}>
-                            <div className="w-1.5 h-1.5 bg-current rounded-full mr-1"></div>
-                            {resource.status}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="font-medium">
-                          {resource.monthlyCost ? `$${resource.monthlyCost}` : (
-                            <span className="text-gray-400 italic">No cost data</span>
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          <span className="text-sm text-gray-600">
-                            {resource.region || "Global"}
-                          </span>
-                        </TableCell>
-                        <TableCell>
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <Button variant="ghost" size="sm">
-                                <MoreHorizontal className="w-4 h-4" />
-                              </Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              <DropdownMenuItem
-                                onClick={() => handleViewDetails(resource)}
-                              >
-                                <Eye className="w-4 h-4 mr-2" />
-                                View Details
-                              </DropdownMenuItem>
-                              {account && (
-                                <DropdownMenuItem
-                                  onClick={() => handleSyncAccount(account.id)}
-                                  disabled={syncMutation.isPending}
-                                >
-                                  <RefreshCw className="w-4 h-4 mr-2" />
-                                  Sync Account
-                                </DropdownMenuItem>
-                              )}
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
+              {/* Legacy view - Search and Filters */}
+              <Card className="mb-6">
+                <CardContent className="p-6">
+                  <div className="flex flex-col lg:flex-row lg:items-center space-y-4 lg:space-y-0 lg:space-x-4">
+                    <div className="flex-1 relative">
+                      <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
+                      <Input
+                        placeholder="Search resources by name, type, region, or metadata..."
+                        className="pl-10"
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                      />
+                    </div>
+                    <div className="flex space-x-3">
+                      <Select value={selectedProvider} onValueChange={setSelectedProvider}>
+                        <SelectTrigger className="w-40">
+                          <SelectValue placeholder="All Providers" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All Providers</SelectItem>
+                          <SelectItem value="aws">AWS</SelectItem>
+                          <SelectItem value="azure">Azure</SelectItem>
+                          <SelectItem value="snowflake">Snowflake</SelectItem>
+                        </SelectContent>
+                      </Select>
 
-              {/* Pagination */}
-              {totalPages > 1 && (
-                <div className="px-6 py-4 border-t border-gray-200">
-                  <div className="flex items-center justify-between">
-                    <p className="text-sm text-gray-700">
-                      Showing{" "}
-                      <span className="font-medium">{(currentPage - 1) * itemsPerPage + 1}</span>{" "}
-                      to{" "}
-                      <span className="font-medium">
-                        {Math.min(currentPage * itemsPerPage, resources.length)}
-                      </span>{" "}
-                      of <span className="font-medium">{resources.length}</span> results
-                    </p>
-                    <div className="flex items-center space-x-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
-                        disabled={currentPage === 1}
-                      >
-                        Previous
-                      </Button>
-                      {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                        const page = Math.max(1, Math.min(totalPages - 4, currentPage - 2)) + i;
-                        return (
-                          <Button
-                            key={page}
-                            variant={currentPage === page ? "default" : "outline"}
-                            size="sm"
-                            onClick={() => setCurrentPage(page)}
-                          >
-                            {page}
-                          </Button>
-                        );
-                      })}
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setCurrentPage(Math.min(totalPages, currentPage + 1))}
-                        disabled={currentPage === totalPages}
-                      >
-                        Next
-                      </Button>
+                      <Select value={selectedType} onValueChange={setSelectedType}>
+                        <SelectTrigger className="w-40">
+                          <SelectValue placeholder="All Types" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All Types</SelectItem>
+                          {uniqueTypes.map((type) => (
+                            <SelectItem key={type} value={type}>
+                              {formatResourceType(type)}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+
+                      <Select value={selectedStatus} onValueChange={setSelectedStatus}>
+                        <SelectTrigger className="w-32">
+                          <SelectValue placeholder="All Status" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All Status</SelectItem>
+                          {uniqueStatuses.map((status) => (
+                            <SelectItem key={status} value={status}>
+                              {status.charAt(0).toUpperCase() + status.slice(1)}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </div>
                   </div>
-                </div>
-              )}
+                </CardContent>
+              </Card>
+
+              {/* Legacy Resources Table */}
+              <Card>
+                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                  <div>
+                    <CardTitle className="text-lg font-semibold">Resource Inventory</CardTitle>
+                    <p className="text-sm text-gray-600 mt-1">
+                      Showing {paginatedResources.length} of {resources.length} resources
+                      {sortBy !== 'name' && (
+                        <span className="ml-2 text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded">
+                          Sorted by {sortBy} ({sortOrder})
+                        </span>
+                      )}
+                    </p>
+                  </div>
+                  <div className="flex items-center space-x-3">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => refetch()}
+                      disabled={isLoading}
+                    >
+                      <RefreshCw className={`w-4 h-4 mr-2 ${isLoading ? "animate-spin" : ""}`} />
+                      Refresh
+                    </Button>
+                    <Button variant="outline" size="sm">
+                      <Download className="w-4 h-4 mr-2" />
+                      Export
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent className="p-0">
+                  {isLoading ? (
+                    <div className="p-8 text-center">
+                      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto"></div>
+                      <p className="mt-2 text-gray-600">Loading resources...</p>
+                    </div>
+                  ) : paginatedResources.length === 0 ? (
+                    <div className="p-8 text-center text-gray-500">
+                      <Search className="w-12 h-12 mx-auto mb-4 text-gray-300" />
+                      <p className="text-lg font-medium">No resources found</p>
+                      <p className="text-sm">Try adjusting your search criteria or sync your accounts</p>
+                    </div>
+                  ) : (
+                    <>
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>
+                              <button
+                                className="flex items-center space-x-1 hover:text-primary font-medium"
+                                onClick={() => handleSort('name')}
+                              >
+                                <span>Resource</span>
+                                {getSortIcon('name')}
+                              </button>
+                            </TableHead>
+                            <TableHead>
+                              <button
+                                className="flex items-center space-x-1 hover:text-primary font-medium"
+                                onClick={() => handleSort('provider')}
+                              >
+                                <span>Provider</span>
+                                {getSortIcon('provider')}
+                              </button>
+                            </TableHead>
+                            <TableHead>
+                              <button
+                                className="flex items-center space-x-1 hover:text-primary font-medium"
+                                onClick={() => handleSort('type')}
+                              >
+                                <span>Type</span>
+                                {getSortIcon('type')}
+                              </button>
+                            </TableHead>
+                            <TableHead>
+                              <button
+                                className="flex items-center space-x-1 hover:text-primary font-medium"
+                                onClick={() => handleSort('status')}
+                              >
+                                <span>Status</span>
+                                {getSortIcon('status')}
+                              </button>
+                            </TableHead>
+                            <TableHead>
+                              <button
+                                className="flex items-center space-x-1 hover:text-primary font-medium"
+                                onClick={() => handleSort('monthlyCost')}
+                              >
+                                <span>Cost (Month-to-Date)</span>
+                                {getSortIcon('monthlyCost')}
+                              </button>
+                            </TableHead>
+                            <TableHead>
+                              <button
+                                className="flex items-center space-x-1 hover:text-primary font-medium"
+                                onClick={() => handleSort('region')}
+                              >
+                                <span>Region</span>
+                                {getSortIcon('region')}
+                              </button>
+                            </TableHead>
+                            <TableHead className="w-[100px]">Actions</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {paginatedResources.map((resource) => {
+                            const account = accounts.find(acc => acc.id === resource.accountId);
+                            return (
+                              <TableRow key={resource.id}>
+                                <TableCell>
+                                  <div className="flex items-center space-x-3">
+                                    <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center">
+                                      {getProviderIcon(resource.provider)}
+                                    </div>
+                                    <div>
+                                      <div className="font-medium text-gray-900">{resource.name}</div>
+                                      <div className="text-sm text-gray-500 font-mono text-xs">
+                                        {resource.resourceId.length > 30 ? 
+                                          `${resource.resourceId.substring(0, 30)}...` : 
+                                          resource.resourceId
+                                        }
+                                      </div>
+                                    </div>
+                                  </div>
+                                </TableCell>
+                                <TableCell>
+                                  <div className="flex items-center space-x-2">
+                                    {getProviderIcon(resource.provider)}
+                                    <span className="text-sm">{resource.provider.toUpperCase()}</span>
+                                  </div>
+                                </TableCell>
+                                <TableCell>
+                                  <Badge className={getTypeBadgeColor(resource.type)}>
+                                    {formatResourceType(resource.type)}
+                                  </Badge>
+                                </TableCell>
+                                <TableCell>
+                                  <Badge variant={getStatusBadgeVariant(resource.status)}>
+                                    <div className="w-1.5 h-1.5 bg-current rounded-full mr-1"></div>
+                                    {resource.status}
+                                  </Badge>
+                                </TableCell>
+                                <TableCell className="font-medium">
+                                  {resource.monthlyCost ? `$${resource.monthlyCost}` : (
+                                    <span className="text-gray-400 italic">No cost data</span>
+                                  )}
+                                </TableCell>
+                                <TableCell>
+                                  <span className="text-sm text-gray-600">
+                                    {resource.region || "Global"}
+                                  </span>
+                                </TableCell>
+                                <TableCell>
+                                  <DropdownMenu>
+                                    <DropdownMenuTrigger asChild>
+                                      <Button variant="ghost" size="sm">
+                                        <MoreHorizontal className="w-4 h-4" />
+                                      </Button>
+                                    </DropdownMenuTrigger>
+                                    <DropdownMenuContent align="end">
+                                      <DropdownMenuItem
+                                        onClick={() => handleViewDetails(resource)}
+                                      >
+                                        <Eye className="w-4 h-4 mr-2" />
+                                        View Details
+                                      </DropdownMenuItem>
+                                      {account && (
+                                        <DropdownMenuItem
+                                          onClick={() => handleSyncAccount(account.id)}
+                                          disabled={syncMutation.isPending}
+                                        >
+                                          <RefreshCw className="w-4 h-4 mr-2" />
+                                          Sync Account
+                                        </DropdownMenuItem>
+                                      )}
+                                    </DropdownMenuContent>
+                                  </DropdownMenu>
+                                </TableCell>
+                              </TableRow>
+                            );
+                          })}
+                        </TableBody>
+                      </Table>
+
+                      {/* Pagination */}
+                      {totalPages > 1 && (
+                        <div className="px-6 py-4 border-t border-gray-200">
+                          <div className="flex items-center justify-between">
+                            <p className="text-sm text-gray-700">
+                              Showing{" "}
+                              <span className="font-medium">{(currentPage - 1) * itemsPerPage + 1}</span>{" "}
+                              to{" "}
+                              <span className="font-medium">
+                                {Math.min(currentPage * itemsPerPage, resources.length)}
+                              </span>{" "}
+                              of <span className="font-medium">{resources.length}</span> results
+                            </p>
+                            <div className="flex items-center space-x-2">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
+                                disabled={currentPage === 1}
+                              >
+                                Previous
+                              </Button>
+                              {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                                const page = Math.max(1, Math.min(totalPages - 4, currentPage - 2)) + i;
+                                return (
+                                  <Button
+                                    key={page}
+                                    variant={currentPage === page ? "default" : "outline"}
+                                    size="sm"
+                                    onClick={() => setCurrentPage(page)}
+                                  >
+                                    {page}
+                                  </Button>
+                                );
+                              })}
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setCurrentPage(Math.min(totalPages, currentPage + 1))}
+                                disabled={currentPage === totalPages}
+                              >
+                                Next
+                              </Button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </CardContent>
+              </Card>
             </>
           )}
-        </CardContent>
-      </Card>
+        </TabsContent>
+        
+        <TabsContent value="optimization">
+          <CostOptimizationEngine
+            resources={resources}
+            accounts={accounts}
+          />
+        </TabsContent>
+      </Tabs>
 
       {/* Resource Details Dialog */}
       <Dialog open={isDetailsOpen} onOpenChange={setIsDetailsOpen}>
-        <DialogContent className="max-w-4xl max-h-[80vh]">
+        <DialogContent className="max-w-5xl max-h-[90vh]">
           <DialogHeader>
             <DialogTitle className="flex items-center space-x-3">
               {selectedResource && getResourceIcon(selectedResource.type)}
@@ -600,8 +650,15 @@ export function Resources() {
           </DialogHeader>
           
           {selectedResource && (
-            <ScrollArea className="max-h-[60vh]">
-              <div className="space-y-6">
+            <Tabs defaultValue="details" className="w-full">
+              <TabsList className="grid w-full grid-cols-2">
+                <TabsTrigger value="details">Details</TabsTrigger>
+                <TabsTrigger value="costs">Cost Breakdown</TabsTrigger>
+              </TabsList>
+              
+              <TabsContent value="details">
+                <ScrollArea className="max-h-[60vh]">
+                  <div className="space-y-6">
                 {/* Basic Information */}
                 <div>
                   <h3 className="text-lg font-semibold mb-3 flex items-center">
@@ -807,6 +864,17 @@ export function Resources() {
                 </div>
               </div>
             </ScrollArea>
+              </TabsContent>
+              
+              <TabsContent value="costs">
+                <div className="mt-4">
+                  <CostBreakdown 
+                    resourceId={selectedResource.resourceId} 
+                    totalCost={selectedResource.monthlyCost}
+                  />
+                </div>
+              </TabsContent>
+            </Tabs>
           )}
         </DialogContent>
       </Dialog>

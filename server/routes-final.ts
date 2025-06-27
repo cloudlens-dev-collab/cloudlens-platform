@@ -135,7 +135,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      // Use Simple Orchestrator with permission flow
+      // Use Simple Orchestrator (temporarily while debugging LangGraph agent)
       const result = await simpleOrchestrator.processQuery(
         sessionId, 
         message, 
@@ -152,20 +152,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         usage: { promptTokens: 200, completionTokens: 400, totalTokens: 600 }
       };
 
-      // Store assistant response
+      // Store assistant response with visualizations
       const assistantMessage = await storage.createChatMessage({
         sessionId,
         role: "assistant",
         content: response.content,
         model,
+        visualizations: response.visualizations,
         usage: response.usage
       });
-
-      // Add visualizations to the assistant message
-      const enrichedAssistantMessage = {
-        ...assistantMessage,
-        visualizations: response.visualizations || []
-      };
 
       console.log(`📊 TOKENS: ${response.usage.totalTokens} total`);
       console.log(`📈 VISUALIZATIONS: Generated ${response.visualizations?.length || 0} charts/tables`);
@@ -180,7 +175,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
           timestamp: new Date()
         },
-        assistantMessage: enrichedAssistantMessage
+        assistantMessage
       });
 
     } catch (error) {
@@ -283,6 +278,54 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.error("❌ RESOURCES ERROR:", error);
       res.status(500).json({ 
         error: "Failed to fetch resources",
+        details: error instanceof Error ? error.message : String(error)
+      });
+    }
+  });
+
+  // Get detailed cost breakdown for a specific resource
+  app.get("/api/resources/:resourceId/cost-breakdown", async (req: Request, res: Response) => {
+    try {
+      const { resourceId } = req.params;
+      console.log(`🔍 COST BREAKDOWN REQUEST for resource: ${resourceId}`);
+      
+      const resource = await storage.getResourceByResourceId(resourceId);
+      if (!resource) {
+        return res.status(404).json({ error: "Resource not found" });
+      }
+      
+      const costBreakdown = resource.costBreakdown;
+      
+      if (!costBreakdown) {
+        return res.json({
+          resourceId,
+          totalCost: resource.monthlyCost || 0,
+          services: {},
+          usageTypes: {},
+          dailyCosts: [],
+          message: "No detailed cost breakdown available"
+        });
+      }
+
+      console.log(`📊 COST BREAKDOWN RESPONSE for ${resourceId}:`, {
+        totalCost: costBreakdown.totalCost,
+        serviceCount: Object.keys(costBreakdown.services || {}).length,
+        usageTypeCount: Object.keys(costBreakdown.usageTypes || {}).length,
+        dailyDataPoints: costBreakdown.dailyCosts?.length || 0
+      });
+
+      res.json({
+        resourceId,
+        totalCost: costBreakdown.totalCost || resource.monthlyCost || 0,
+        services: costBreakdown.services || {},
+        usageTypes: costBreakdown.usageTypes || {},
+        dailyCosts: costBreakdown.dailyCosts || [],
+        period: "month-to-date"
+      });
+    } catch (error) {
+      console.error("❌ COST BREAKDOWN ERROR:", error);
+      res.status(500).json({ 
+        error: "Failed to fetch cost breakdown",
         details: error instanceof Error ? error.message : String(error)
       });
     }
