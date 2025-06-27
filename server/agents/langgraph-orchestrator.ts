@@ -292,40 +292,76 @@ class LangGraphOrchestrator {
       const totalMonthlyCost = stoppedInstances
         .reduce((sum, instance) => sum + parseFloat(instance.monthlyCost || '0'), 0);
 
-      // Generate notable patterns
+      // Generate notable patterns and insights
       const patterns = this.analyzePatterns(stoppedInstances, accounts);
+      const insights = this.generateInsights(stoppedInstances);
+      const followUps = this.generateFollowUpQuestions(stoppedInstances, currentAccount);
 
-      const response = `# 📊 Stopped Instances Overview
-
-${currentAccount === "All Accounts" ? 
-  `You have **${stoppedInstances.length} stopped EC2 instances** across your AWS infrastructure.` :
-  `Account **${currentAccount}** has **${stoppedInstances.length} stopped EC2 instances**.`}
-
-## 📍 Distribution by Region
-${regionList}
-
-## 🏢 Distribution by Account  
-${accountList}
-
-## 💰 Cost Impact
-${totalMonthlyCost > 0 ? 
-  `These stopped instances represent **$${totalMonthlyCost.toFixed(2)}/month** in storage costs.` :
-  'Cost information is being calculated...'
+      // Create detailed table view if instances exist
+      let detailedTable = '';
+      if (stoppedInstances.length > 0) {
+        detailedTable = `
+## 📋 Instance Details
+${stoppedInstances.length > 5 ? 
+  `Showing top ${Math.min(5, stoppedInstances.length)} instances by cost:` : 
+  'All stopped instances:'
 }
 
-While stopped instances don't incur compute charges, they still maintain EBS storage costs.
+| Instance Name | Instance ID | Type | Region | Monthly Cost |
+|---------------|-------------|------|---------|---------------|
+${stoppedInstances
+  .sort((a, b) => parseFloat(b.monthlyCost || '0') - parseFloat(a.monthlyCost || '0'))
+  .slice(0, 5)
+  .map(instance => {
+    const cost = instance.monthlyCost ? `$${parseFloat(instance.monthlyCost).toFixed(2)}` : 'N/A';
+    const instanceType = instance.metadata?.instanceType || 'Unknown';
+    return `| **${instance.name}** | ${instance.resourceId} | ${instanceType} | ${instance.region} | ${cost} |`;
+  })
+  .join('\n')}
+`;
+      }
 
-## 🔍 Notable Patterns
-${patterns.join('\n')}
-
-## 📈 Visual Analysis
-The charts above show the distribution patterns and help identify optimization opportunities.
+      const response = `# 📊 Stopped Instances${currentAccount !== "All Accounts" ? ` - ${currentAccount}` : ''}
 
 ${currentAccount === "All Accounts" ? 
-  "💡 **Tip**: Select a specific account from the dropdown to see detailed analysis for that account." :
-  `💡 **Tip**: You're currently viewing data for ${currentAccount}. Switch to "All Accounts" to see the complete picture.`}
+  `You have **${stoppedInstances.length} stopped EC2 instances** across your AWS infrastructure:` :
+  `You have **${stoppedInstances.length} stopped EC2 instances** in **${currentAccount}**:`
+}
 
-Would you like me to analyze any specific instances or provide recommendations for cost optimization?`;
+${stoppedInstances.length > 0 ? `
+## 📍 ${regionList.split('\n').length > 1 ? 'Regional Distribution' : 'All instances are located in **' + Object.keys(this.groupBy(stoppedInstances, 'region'))[0] + '**'}
+${regionList}
+
+${detailedTable}
+
+## 💰 Cost Summary
+${totalMonthlyCost > 0 ? 
+  `- **Total monthly cost**: $${totalMonthlyCost.toFixed(2)}
+${insights.costBreakdown}` :
+  '- Cost information is being calculated...'
+}
+
+## 🔍 Key Insights
+${insights.keyFindings.join('\n')}
+
+${patterns.length > 0 ? `
+## 🔍 Notable Patterns
+${patterns.join('\n')}
+` : ''}
+
+## 📈 What You Can Do Next
+
+${followUps.join('\n')}
+
+---
+
+💡 **Quick Actions:**
+- **Terminate unused instances** to eliminate storage costs
+- **Start instances** that are needed for current workloads  
+- **Right-size instances** before restarting to optimize costs
+- **Set up automated scheduling** to stop/start instances based on usage patterns` : 
+  'No stopped instances found in the selected scope.'
+}`;
 
       return {
         ...state,
@@ -379,9 +415,106 @@ Would you like me to analyze any specific instances or provide recommendations f
     }, {});
   }
 
+  private generateInsights(instances: any[]): { keyFindings: string[], costBreakdown: string } {
+    const keyFindings = [];
+    let costBreakdown = '';
+    
+    if (instances.length === 0) {
+      return { keyFindings: ['- No stopped instances found'], costBreakdown: '' };
+    }
+
+    // Sort instances by cost
+    const sortedByCost = instances
+      .filter(i => i.monthlyCost && parseFloat(i.monthlyCost) > 0)
+      .sort((a, b) => parseFloat(b.monthlyCost) - parseFloat(a.monthlyCost));
+
+    if (sortedByCost.length > 0) {
+      const highest = sortedByCost[0];
+      const lowest = sortedByCost[sortedByCost.length - 1];
+      
+      keyFindings.push(`- **Largest cost**: ${highest.name} (${highest.metadata?.instanceType || 'Unknown'}) at $${parseFloat(highest.monthlyCost).toFixed(2)}/month`);
+      
+      if (sortedByCost.length > 1) {
+        keyFindings.push(`- **Smallest cost**: ${lowest.name} (${lowest.metadata?.instanceType || 'Unknown'}) at $${parseFloat(lowest.monthlyCost).toFixed(2)}/month`);
+      }
+
+      // Cost concentration analysis
+      const totalCost = sortedByCost.reduce((sum, i) => sum + parseFloat(i.monthlyCost), 0);
+      const highestPercentage = (parseFloat(highest.monthlyCost) / totalCost) * 100;
+      
+      if (highestPercentage > 50) {
+        keyFindings.push(`- The **${highest.name}** instance represents **${highestPercentage.toFixed(0)}%** of total stopped instance costs`);
+      }
+
+      costBreakdown = `- **Average cost per instance**: $${(totalCost / sortedByCost.length).toFixed(2)}/month`;
+    }
+
+    // Instance type analysis
+    const instanceTypes = [...new Set(instances.map(i => i.metadata?.instanceType).filter(Boolean))];
+    if (instanceTypes.length > 1) {
+      keyFindings.push(`- Mix of **${instanceTypes.length} different instance types** from nano to xlarge`);
+    }
+
+    // Regional concentration
+    const regions = [...new Set(instances.map(i => i.region).filter(Boolean))];
+    if (regions.length === 1) {
+      keyFindings.push(`- All instances are in the same region (**${regions[0]}**)`);
+    } else {
+      keyFindings.push(`- Instances distributed across **${regions.length} regions**`);
+    }
+
+    return { keyFindings, costBreakdown };
+  }
+
+  private generateFollowUpQuestions(instances: any[], currentAccount: string): string[] {
+    const followUps = [];
+
+    if (instances.length === 0) {
+      followUps.push("🔍 **Want to check other resources?** Ask about unattached volumes or running instances");
+      return followUps;
+    }
+
+    // Cost-based follow-ups
+    const sortedByCost = instances
+      .filter(i => i.monthlyCost && parseFloat(i.monthlyCost) > 0)
+      .sort((a, b) => parseFloat(b.monthlyCost) - parseFloat(a.monthlyCost));
+
+    if (sortedByCost.length > 0) {
+      const expensive = sortedByCost.slice(0, 2);
+      followUps.push(`💰 **Analyze specific instances?** Tell me more about ${expensive.map(i => i.name).join(' or ')}`);
+    }
+
+    // Regional follow-ups
+    const regions = [...new Set(instances.map(i => i.region).filter(Boolean))];
+    if (regions.length > 1) {
+      followUps.push(`📍 **Regional analysis?** Compare costs between ${regions.slice(0, 2).join(' and ')} regions`);
+    }
+
+    // Instance type follow-ups
+    const expensiveTypes = [...new Set(sortedByCost.slice(0, 3).map(i => i.metadata?.instanceType).filter(Boolean))];
+    if (expensiveTypes.length > 0) {
+      followUps.push(`⚙️ **Right-sizing analysis?** Check if these ${expensiveTypes.join(', ')} instances are properly sized`);
+    }
+
+    // Account-specific follow-ups
+    if (currentAccount === "All Accounts") {
+      followUps.push(`🏢 **Focus on specific account?** Select an account from the dropdown for detailed analysis`);
+    } else {
+      followUps.push(`🔍 **Check other resources in ${currentAccount}?** Ask about running instances, unattached volumes, or cost trends`);
+    }
+
+    // Optimization follow-ups
+    followUps.push(`📊 **Optimization recommendations?** Get specific suggestions for reducing costs`);
+    followUps.push(`⏰ **Usage patterns?** Analyze when these instances were last used`);
+
+    return followUps.slice(0, 4); // Limit to 4 follow-ups
+  }
+
   private analyzePatterns(instances: any[], accounts: any[]): string[] {
     const patterns = [];
     
+    if (instances.length === 0) return [];
+
     // Account concentration
     const accountStats = this.groupBy(instances, 'accountId');
     const sortedAccounts = Object.entries(accountStats)
@@ -395,7 +528,7 @@ Would you like me to analyze any specific instances or provide recommendations f
 
     // Instance type diversity
     const instanceTypes = [...new Set(instances.map(i => i.metadata?.instanceType).filter(Boolean))];
-    if (instanceTypes.length > 5) {
+    if (instanceTypes.length > 3) {
       patterns.push(`- Wide variety of instance types (${instanceTypes.length} different types) from cost-effective to high-performance`);
     }
 
@@ -408,7 +541,7 @@ Would you like me to analyze any specific instances or provide recommendations f
       patterns.push(`- Multiple naming conventions suggest different projects or environments (${uniquePatterns.slice(0, 3).join(', ')}...)`);
     }
 
-    return patterns.length > 0 ? patterns : ['- Analysis shows diverse instance distribution across your infrastructure'];
+    return patterns;
   }
 }
 
