@@ -66,6 +66,11 @@ class LangGraphOrchestrator {
   async processQuery(sessionId: string, query: string, accountIds: number[], currentAccount: string) {
     console.log(`🎯 LANGGRAPH: Processing query "${query}" for accounts ${accountIds} (current: ${currentAccount})`);
     
+    // Check if this is a permission response first
+    if (this.isPermissionResponse(query)) {
+      return await this.handlePermissionResponse(sessionId, query, accountIds, currentAccount);
+    }
+    
     const compiled = this.graph.compile();
     
     const result = await compiled.invoke({
@@ -80,7 +85,51 @@ class LangGraphOrchestrator {
       response: result.analysisResult?.response || "Analysis completed",
       visualizations: result.visualizations || [],
       context: result.context || {},
+      needsPermission: result.analysisResult?.needsPermission || false,
+      suggestedTasks: result.analysisResult?.suggestedTasks || []
     };
+  }
+
+  private isPermissionResponse(query: string): boolean {
+    const lowerQuery = query.toLowerCase().trim();
+    const yesPatterns = ['yes', 'proceed', 'go ahead', 'continue', 'do it', 'sure', 'ok', 'okay', 'y'];
+    const noPatterns = ['no', 'stop', 'cancel', 'abort', 'don\'t', 'skip', 'n'];
+    
+    return yesPatterns.includes(lowerQuery) || noPatterns.includes(lowerQuery);
+  }
+
+  private async handlePermissionResponse(sessionId: string, query: string, accountIds: number[], currentAccount: string) {
+    const lowerQuery = query.toLowerCase().trim();
+    const isApproval = ['yes', 'proceed', 'go ahead', 'continue', 'do it', 'sure', 'ok', 'okay', 'y'].includes(lowerQuery);
+    
+    if (isApproval) {
+      console.log(`✅ PERMISSION GRANTED: Executing pending tasks for session ${sessionId}`);
+      
+      // Execute the pending analysis tasks
+      const compiled = this.graph.compile();
+      const result = await compiled.invoke({
+        query: "execute_pending_analysis", // Special query to trigger full analysis
+        accountIds,
+        sessionId,
+        currentAccount,
+        messages: [new HumanMessage("Execute approved analysis")],
+      });
+
+      return {
+        response: result.analysisResult?.response || "Analysis completed",
+        visualizations: result.visualizations || [],
+        context: result.context || {},
+        needsPermission: false
+      };
+    } else {
+      console.log(`❌ PERMISSION DENIED: User declined analysis for session ${sessionId}`);
+      return {
+        response: "Understood. Let me know if you'd like me to help with something else regarding your infrastructure.",
+        visualizations: [],
+        context: {},
+        needsPermission: false
+      };
+    }
   }
 
   private async analyzeQuery(state: typeof GraphState.State) {
@@ -91,6 +140,9 @@ class LangGraphOrchestrator {
     // Analyze query for intent and entities
     const intent = this.extractIntent(query);
     const entities = this.extractEntities(query);
+    
+    // Determine if this requires permission
+    const requiresPermission = this.shouldAskPermission(query, intent);
     
     // Determine scope based on current account context
     let targetAccountIds = accountIds;
@@ -111,7 +163,103 @@ class LangGraphOrchestrator {
         intent,
         entities,
         scope: currentAccount === "All Accounts" ? "multi-account" : "single-account",
-        focusAccount: currentAccount
+        focusAccount: currentAccount,
+        requiresPermission
+      }
+    };
+  }
+
+  private shouldAskPermission(query: string, intent: string[]): boolean {
+    // Don't ask permission for approval responses
+    if (this.isPermissionResponse(query)) {
+      return false;
+    }
+
+    // Ask permission for infrastructure analysis queries
+    const needsPermissionPatterns = [
+      'stopped', 'instances', 'costs', 'optimization', 'resources', 
+      'volumes', 'buckets', 'security', 'performance', 'usage',
+      'running', 'ec2', 's3', 'rds', 'lambda', 'unattached'
+    ];
+    
+    const lowerQuery = query.toLowerCase();
+    const needsPermission = needsPermissionPatterns.some(pattern => lowerQuery.includes(pattern));
+    
+    console.log(`🔒 PERMISSION CHECK: Query "${query}" ${needsPermission ? 'REQUIRES' : 'DOES NOT REQUIRE'} permission`);
+    
+    return needsPermission;
+  }
+
+  private formatPermissionRequest(query: string, context: any, currentAccount: string) {
+    console.log("🔒 FORMATTING PERMISSION REQUEST");
+    
+    const { intent, scope } = context;
+    
+    // Detect what kind of analysis is being requested
+    let analysisType = "infrastructure analysis";
+    let tasksToPerform = [];
+    
+    if (intent.includes('stopped') || intent.includes('instances')) {
+      analysisType = "stopped instances analysis";
+      tasksToPerform = [
+        "Scan all EC2 instances to identify stopped instances",
+        "Calculate monthly storage costs for stopped instances",
+        "Analyze regional and account distribution",
+        "Generate cost optimization recommendations",
+        "Create detailed tables and visualizations"
+      ];
+    } else if (intent.includes('costs') || intent.includes('spending')) {
+      analysisType = "cost analysis";
+      tasksToPerform = [
+        "Query cost data across all selected accounts",
+        "Calculate cost trends and patterns",
+        "Identify top spending services and regions",
+        "Generate cost breakdown visualizations",
+        "Provide optimization insights"
+      ];
+    } else if (intent.includes('optimization')) {
+      analysisType = "optimization analysis";
+      tasksToPerform = [
+        "Scan for unattached EBS volumes",
+        "Identify stopped instances",
+        "Calculate potential cost savings",
+        "Analyze resource utilization patterns",
+        "Generate actionable recommendations"
+      ];
+    } else {
+      // Generic infrastructure analysis
+      tasksToPerform = [
+        "Analyze resource inventory and costs",
+        "Generate comprehensive visualizations",
+        "Provide insights and recommendations",
+        "Create detailed data tables"
+      ];
+    }
+
+    const accountScope = currentAccount === "All Accounts" ? 
+      "all your AWS accounts" : 
+      `your **${currentAccount}** account`;
+
+    const response = `I understand you want to analyze **${query}**.
+
+To provide you with comprehensive insights, I need to perform a **${analysisType}** across ${accountScope}. This will involve:
+
+${tasksToPerform.map((task, i) => `${i + 1}. ${task}`).join('\n')}
+
+**Would you like me to proceed with this analysis?**
+
+Simply respond with:
+- **"Yes"** or **"Proceed"** to start the analysis
+- **"No"** if you'd prefer to skip this analysis
+
+This approach ensures I give you exactly the information you need while being transparent about what data I'm analyzing.`;
+
+    return {
+      ...context,
+      analysisResult: { 
+        response,
+        needsPermission: true,
+        suggestedTasks: tasksToPerform
       }
     };
   }
@@ -264,7 +412,12 @@ class LangGraphOrchestrator {
     console.log("✨ LANGGRAPH: Formatting Claude-like response");
     
     const { query, context, visualizations, currentAccount } = state;
-    const { resources, accounts } = context;
+    const { resources, accounts, requiresPermission } = context;
+    
+    // If permission is required, ask for it first
+    if (requiresPermission && query !== "execute_pending_analysis") {
+      return this.formatPermissionRequest(query, context, currentAccount);
+    }
     
     if (context.intent.includes('stopped') || context.intent.includes('instances')) {
       const stoppedInstances = resources.filter(r => 

@@ -73,6 +73,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         content: result.response,
         visualizations: result.visualizations,
         context: result.context,
+        needsPermission: result.needsPermission,
+        suggestedTasks: result.suggestedTasks,
         usage: { promptTokens: 200, completionTokens: 400, totalTokens: 600 }
       };
 
