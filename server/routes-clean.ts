@@ -3,7 +3,7 @@ import { createServer, Server } from "http";
 import { z } from "zod";
 import { storage } from "./storage";
 import { llmService } from "./services/llm";
-import { langGraphOrchestrator } from "./agents/langgraph-orchestrator";
+import { simpleOrchestrator } from "./agents/simple-orchestrator";
 
 function isInfrastructureQuery(message: string): boolean {
   const infraKeywords = [
@@ -61,8 +61,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      // Use LangGraph orchestrator for comprehensive analysis
-      const result = await langGraphOrchestrator.processQuery(
+      // Use Simple Orchestrator with permission flow
+      const result = await simpleOrchestrator.processQuery(
         sessionId, 
         message, 
         targetAccountIds,
@@ -71,10 +71,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const response = {
         content: result.response,
-        visualizations: result.visualizations,
-        context: result.context,
-        needsPermission: result.needsPermission,
-        suggestedTasks: result.suggestedTasks,
+        visualizations: result.visualizations || [],
+        context: {},
+        needsPermission: result.needsPermission || false,
+        suggestedTasks: result.suggestedTasks || [],
         usage: { promptTokens: 200, completionTokens: 400, totalTokens: 600 }
       };
 
