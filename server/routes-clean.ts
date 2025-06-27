@@ -3,6 +3,7 @@ import { createServer, Server } from "http";
 import { z } from "zod";
 import { storage } from "./storage";
 import { llmService } from "./services/llm";
+import { sqlAgent } from "./agents/sql-agent";
 
 function isInfrastructureQuery(message: string): boolean {
   const infraKeywords = [
@@ -27,16 +28,13 @@ function isInfrastructureQuery(message: string): boolean {
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
-  // Clean Chat endpoint with database context approach
+  // Advanced SQL Agent Chat endpoint with memory and task planning
   app.post("/api/chat/:sessionId", async (req: Request, res: Response) => {
     try {
       const { sessionId } = req.params;
       const { message, model = "claude", accountIds } = req.body;
 
-      console.log(`📥 CHAT REQUEST: User "${sessionId}" asked: "${message}" with model: ${model}, accounts: ${accountIds || 'all'}`);
-
-      // Get conversation history
-      const conversationHistory = await storage.getChatMessages(sessionId);
+      console.log(`🤖 SQL AGENT: User "${sessionId}" asked: "${message}" with model: ${model}, accounts: ${accountIds || 'all'}`);
 
       // Store user message
       await storage.createChatMessage({
@@ -53,145 +51,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
         allAccounts.map(acc => acc.id) : 
         (Array.isArray(accountIds) ? accountIds : [accountIds]);
 
-      // Check if this is an infrastructure-related query
-      const isInfraQuery = isInfrastructureQuery(message);
-      console.log(`🔍 QUERY ANALYSIS: Infrastructure query detected: ${isInfraQuery}`);
+      // Use SQL Agent for comprehensive analysis with memory and task planning
+      const agentResult = await sqlAgent.processQuery(sessionId, message, targetAccountIds);
       
       let response;
 
-      // For ALL infrastructure queries, provide complete database context to LLM
-      if (isInfraQuery) {
-        try {
-          console.log("🎯 DATABASE CONTEXT: Providing complete database context to LLM for investigation");
-          
-          // Load complete authentic database context
-          const accounts = await storage.getAccounts();
-          const costs = await storage.getCosts(targetAccountIds);
-          const resources = await storage.getResources(targetAccountIds);
-          const alerts = await storage.getAlerts(targetAccountIds);
-          
-          // Create optimized context for LLM analysis
-          const totalCostFromRecords = costs.reduce((sum, cost) => sum + parseFloat(cost.amount), 0);
-          
-          // Group costs by region for efficient analysis
-          const costsByRegion = costs.reduce((acc, cost) => {
-            const region = cost.region || 'unknown';
-            if (!acc[region]) {
-              acc[region] = { total: 0, services: {}, count: 0 };
-            }
-            acc[region].total += parseFloat(cost.amount);
-            acc[region].count++;
-            
-            const service = cost.service || 'unknown';
-            if (!acc[region].services[service]) {
-              acc[region].services[service] = 0;
-            }
-            acc[region].services[service] += parseFloat(cost.amount);
-            return acc;
-          }, {} as Record<string, any>);
-
-          // Group resources by region and type for efficient analysis
-          const resourcesByRegion = resources.reduce((acc, resource) => {
-            const region = resource.region || 'unknown';
-            if (!acc[region]) {
-              acc[region] = { types: {}, totalCost: 0, count: 0 };
-            }
-            
-            const type = resource.type || 'unknown';
-            if (!acc[region].types[type]) {
-              acc[region].types[type] = { count: 0, cost: 0, statuses: {} };
-            }
-            acc[region].types[type].count++;
-            acc[region].types[type].cost += parseFloat(resource.monthlyCost || '0');
-            acc[region].totalCost += parseFloat(resource.monthlyCost || '0');
-            acc[region].count++;
-            
-            const status = resource.status || 'unknown';
-            if (!acc[region].types[type].statuses[status]) {
-              acc[region].types[type].statuses[status] = 0;
-            }
-            acc[region].types[type].statuses[status]++;
-            return acc;
-          }, {} as Record<string, any>);
-
-          const analysisPrompt = `You are analyzing authentic cloud infrastructure data from a production environment.
-
-INFRASTRUCTURE SUMMARY:
-- Total Accounts: ${accounts.length}
-- Total Resources: ${resources.length}
-- Total Cost Records: ${costs.length} ($${totalCostFromRecords.toFixed(2)})
-- Total Alerts: ${alerts.length}
-
-ACCOUNT CONTEXT:
-${accounts.map(acc => `${acc.name} (${acc.provider}) - ${acc.region || 'multi-region'}`).join('\n')}
-
-COSTS BY REGION:
-${Object.entries(costsByRegion)
-  .sort(([,a], [,b]) => (b as any).total - (a as any).total)
-  .map(([region, data]: [string, any]) => 
-    `${region}: $${data.total.toFixed(2)} (${data.count} records)\n  Top Services: ${Object.entries(data.services)
-      .sort(([,a], [,b]) => (b as number) - (a as number))
-      .slice(0, 3)
-      .map(([service, cost]) => `${service}: $${(cost as number).toFixed(2)}`)
-      .join(', ')}`
-  ).join('\n')}
-
-RESOURCES BY REGION:
-${Object.entries(resourcesByRegion)
-  .sort(([,a], [,b]) => (b as any).totalCost - (a as any).totalCost)
-  .map(([region, data]: [string, any]) => 
-    `${region}: ${data.count} resources, $${data.totalCost.toFixed(2)}/month\n  Types: ${Object.entries(data.types)
-      .sort(([,a], [,b]) => (b as any).count - (a as any).count)
-      .slice(0, 5)
-      .map(([type, info]: [string, any]) => `${type}(${info.count})`)
-      .join(', ')}`
-  ).join('\n')}
-
-ALERTS SUMMARY:
-${alerts.length > 0 ? alerts
-  .filter(alert => !alert.isRead)
-  .slice(0, 5)
-  .map(alert => `${alert.severity}: ${alert.message}`)
-  .join('\n') : 'No active alerts'}
-
-User Question: "${message}"
-
-Analyze the authentic infrastructure data above to answer the user's question. Use only the real data provided - no estimates or assumptions. Provide specific insights with exact numbers, regions, and patterns from the actual database records.`;
-
-          // Use Claude to analyze complete database context
-          const Anthropic = (await import("@anthropic-ai/sdk")).default;
-          const anthropic = new Anthropic({
-            apiKey: process.env.ANTHROPIC_API_KEY,
-          });
-          
-          const claudeResponse = await anthropic.messages.create({
-            model: "claude-3-5-sonnet-20241022",
-            max_tokens: 2000,
-            messages: [{ role: "user", content: analysisPrompt }]
-          });
-
-          const analysisContent = claudeResponse.content[0]?.text;
-          
-          if (analysisContent && analysisContent.trim().length > 0) {
-            response = {
-              content: analysisContent,
-              usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 }
-            };
-            console.log("✅ DATABASE ANALYSIS: Claude completed investigation using complete database context");
-          } else {
-            throw new Error("Empty response from Claude");
-          }
-        } catch (analysisError) {
-          console.error("❌ DATABASE ANALYSIS ERROR:", analysisError);
-          response = {
-            content: "I'm analyzing your infrastructure data. Please try your question again.",
-            usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 }
-          };
-        }
+      if (agentResult.needsPermission) {
+        // Agent needs user permission for tasks
+        response = {
+          content: agentResult.response,
+          suggestedTasks: agentResult.suggestedTasks,
+          needsPermission: true,
+          usage: { promptTokens: 100, completionTokens: 200, totalTokens: 300 }
+        };
       } else {
-        // Use basic LLM service for non-infrastructure queries
-        console.log("🔧 BASIC LLM: Using standard LLM service for general queries");
-        response = await llmService.query(message, "");
+        // Agent completed analysis
+        response = {
+          content: agentResult.response,
+          context: agentResult.context,
+          usage: { promptTokens: 150, completionTokens: 300, totalTokens: 450 }
+        };
       }
 
       // Store assistant response
@@ -228,7 +107,37 @@ Analyze the authentic infrastructure data above to answer the user's question. U
     }
   });
 
-  // Other endpoints remain the same...
+  // Task approval endpoint for SQL Agent
+  app.post("/api/chat/:sessionId/approve-tasks", async (req: Request, res: Response) => {
+    try {
+      const { sessionId } = req.params;
+      const { approvedTaskIds } = req.body;
+
+      console.log(`🎯 TASK APPROVAL: Session ${sessionId} approved tasks: ${approvedTaskIds.join(', ')}`);
+
+      // Execute approved tasks
+      const response = await sqlAgent.executePendingTasks(sessionId, approvedTaskIds);
+
+      // Store the result as an assistant message
+      const assistantMessage = await storage.createChatMessage({
+        sessionId,
+        role: "assistant",
+        content: response,
+        model: "sql-agent",
+        usage: { promptTokens: 50, completionTokens: 100, totalTokens: 150 }
+      });
+
+      res.json({ assistantMessage });
+
+    } catch (error) {
+      console.error("Task approval error:", error);
+      res.status(500).json({ 
+        error: "Failed to execute approved tasks",
+        details: error instanceof Error ? error.message : "Unknown error"
+      });
+    }
+  });
+
   app.get("/api/chat/:sessionId", async (req, res) => {
     try {
       const sessionId = req.params.sessionId;

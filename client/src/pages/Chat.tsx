@@ -165,10 +165,10 @@ export function Chat() {
   };
 
   return (
-    <div className="p-6 max-w-4xl mx-auto">
+    <div className="h-screen flex flex-col p-4">
       {/* AI Model Selection */}
-      <Card className="mb-6">
-        <CardContent className="p-4">
+      <Card className="mb-4 flex-shrink-0">
+        <CardContent className="p-3">
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-semibold text-gray-900">AI Assistant</h3>
             <div className="flex items-center space-x-4">
@@ -193,7 +193,7 @@ export function Chat() {
       </Card>
 
       {/* Chat Interface */}
-      <Card className="flex flex-col h-[calc(100vh-300px)]">
+      <Card className="flex flex-col flex-1 min-h-0">
         {/* Chat Header */}
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
           <div>
