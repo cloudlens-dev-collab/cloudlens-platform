@@ -10,6 +10,10 @@ build/
 out/
 server/public
 
+# Development artifacts
+server.log
+attached_assets/
+
 # Environment variables (CRITICAL - NEVER COMMIT THESE!)
 .env
 .env.local
